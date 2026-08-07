@@ -32,8 +32,8 @@
     "generate:jwt-cert": "node scripts/generate-jwt-cert.js"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Darshan",
+  "license": "MIT",
   "type": "commonjs",
   "devDependencies": {
     "@playwright/test": "^1.61.1",
