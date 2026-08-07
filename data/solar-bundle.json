@@ -1,0 +1,170 @@
+{
+  "_comment": "Scenario data for tests/config/solar-bundle-configuration.spec.js — the Solar Controller Hub bundle configurator. Every value below was READ FROM THE DEVELOPER ORG on 2026-07-30, either by SOQL against the CPQ configuration objects or by driving the live configurator and reading its DOM. Nothing here is a guess; where something could not be confirmed it says so in words rather than carrying a plausible-looking number (README Section 10).",
+
+  "_scope": "This scenario is about the CONFIGURATOR — default auto-configuration, per-feature and per-option constraints, feature/tab grouping, attributes, and the Enforce Microinverter Quantity product rule. It is not about pricing and not about the quote lifecycle. Unit prices are recorded below only as provenance for the products; no assertion reads them.",
+
+  "_account": "Pre-existing org sample data. Looked up by exact name, NEVER created and never deleted — registerExisting() records it with sweepEligible = false. Industry MUST NOT be 'Retail': in this org that value drives the record-triggered Flow that creates quote line groups, and this whole spec depends on an UNGROUPED quote. createSimpleQuote throws by name if it ever changes.",
+  "account": {
+    "name": "University of Arizona",
+    "create": false,
+    "sweepEligible": false,
+    "_industry": "READ FROM THE ORG on 2026-07-30: Account 001bm00000hd6hd, Industry = 'Education'. Recorded so a future change is visible as a diff rather than as a mystery failure.",
+    "industry": "Education",
+    "_sharing": "Not reserved by any other suite as of 2026-07-30. Sharing is safe here because every assertion is scoped by SBQQ__Quote__c, never by AccountId — nothing this spec asserts can be affected by another run quoting the same Account. A future spec that genuinely needs exclusivity should reserve it here first, the way home-security.json reserves Klein Manor."
+  },
+
+  "_pricebook": "Deliberately absent. An Opportunity created over REST gets no price book and then cannot hold Opportunity Products at all, so one is required — but the Id is org-specific, so createSimpleQuote resolves the active standard book by query instead of storing it here. home-security.json's hardcoded pricebookId is the older pattern and is not copied.",
+
+  "opportunity": {
+    "baseName": "Solar Controller Hub bundle configuration",
+    "_baseName": "The runId is appended at runtime. The Account is shared across runs and specs, so a bare fixed name accumulates records under it that nobody can tell apart afterwards.",
+    "stage": "Prospecting",
+    "closeDateOffsetDays": 90
+  },
+
+  "quote": {
+    "lineItemsGrouped": false,
+    "primaryAtSeed": false,
+    "_lineItemsGrouped": "False is the point of the scenario, not a convenience. A grouped quote renders a different Quote Line Editor (one section per SBQQ__QuoteLineGroup__c) and every per-line locator in this spec assumes the flat one.",
+    "_primaryAtSeed": "Nothing here needs a primary quote, and marking it primary would kick off the opportunity sync — asynchronous work irrelevant to the configurator that would only add noise."
+  },
+
+  "bundle": {
+    "name": "Solar Controller Hub",
+    "productCode": "SOLARCONTROLLERHUB",
+    "_confirmed": "READ FROM THE ORG on 2026-07-30: Product2 01tbm00000A9pfN, SBQQ__ConfigurationType__c = 'Allowed', SBQQ__ConfigurationEvent__c = 'Always'. That pairing is what makes Add Products hand off to the configurator instead of returning to the selection screen."
+  },
+
+  "_tabs": "SBQQ__ProductFeature__c.SBQQ__Category__c renders as the configurator's tab strip. Order and membership READ FROM THE ORG on 2026-07-30 and confirmed against the live DOM: <paper-tab label=\"Solar Essentials\"> then <paper-tab label=\"Upsells\">, each with its own <sb-product-feature-list>. Only the ACTIVE tab's features exist in the DOM — <iron-pages> renders one page at a time — which is why the spec opens a tab before reading anything on it.",
+  "tabs": [
+    {
+      "name": "Solar Essentials",
+      "_features": "Document order matters and is asserted: the scenario specifies Inverters directly below Panels. It follows SBQQ__ProductFeature__c.SBQQ__Number__c (10, 20, 30).",
+      "features": ["Panels", "Inverters", "Wiring"]
+    },
+    {
+      "name": "Upsells",
+      "features": ["Battery Backup"]
+    }
+  ],
+
+  "_features": "SBQQ__ProductFeature__c min/max option counts, READ FROM THE ORG on 2026-07-30. maxOptionCount = 1 on Inverters is why that feature renders RADIO buttons rather than checkboxes, and why selecting Microinverter auto-deselects Inverter.",
+  "features": {
+    "Panels":         { "minOptionCount": 2, "maxOptionCount": null, "number": 10, "tab": "Solar Essentials" },
+    "Inverters":      { "minOptionCount": 1, "maxOptionCount": 1,    "number": 20, "tab": "Solar Essentials" },
+    "Wiring":         { "minOptionCount": 0, "maxOptionCount": null, "number": 30, "tab": "Solar Essentials" },
+    "Battery Backup": { "minOptionCount": 0, "maxOptionCount": null, "number": 40, "tab": "Upsells" }
+  },
+
+  "_defaults": "The configuration the configurator auto-builds on first open, READ FROM THE LIVE DOM on 2026-07-30 — not inferred from the Product Option records, though it agrees with them. Asserted in full at step 3, including every unselected option BY NAME, so a default that silently changes cannot be absorbed by a matching total.\n\nHow to read the columns:\n  selected        — aria-checked on the option's paper-checkbox / paper-radio-button\n  selectionLocked — aria-disabled on the same control. True for a Required option (SBQQ__Required__c), which CPQ auto-selects and refuses to let a user clear.\n  quantity        — as rendered, to two decimals. Defaults to SBQQ__MinQuantity__c when the Product Option sets one (Solar Panel 400W and Microinverter, both 5), otherwise to 1.\n  quantityEditable— whether clicking the cell opens an input.\n\nThe editability rule, derived from the org and confirmed in the DOM: a quantity is editable if and only if the option is SELECTED and its SBQQ__ProductOption__c.SBQQ__Quantity__c is null. An option with a fixed Quantity (1) renders read-only; an UNSELECTED option is never editable, whatever its Quantity. Note SBQQ__QuantityEditable__c is false on all twelve options and is NOT the signal — reading it that way would predict that nothing in this bundle is editable, which the org contradicts.",
+  "defaults": [
+    { "feature": "Panels",         "option": "Solar Panel 400W",         "productCode": "SOLARPANEL400W",        "selected": true,  "selectionLocked": true,  "quantity": 5, "quantityEditable": true,  "required": true,  "minQuantity": 5,    "unitPrice": 250 },
+    { "feature": "Panels",         "option": "Angled Roof Mounting Kit", "productCode": "ANGLEDROOFMOUNTINGKIT", "selected": true,  "selectionLocked": false, "quantity": 1, "quantityEditable": false, "required": false, "minQuantity": null, "unitPrice": 1500 },
+    { "feature": "Panels",         "option": "Flat Roof Mounting Kit",   "productCode": "FLATROOFMOUNTINGKIT",   "selected": false, "selectionLocked": false, "quantity": 1, "quantityEditable": false, "required": false, "minQuantity": null, "unitPrice": 2000 },
+    { "feature": "Panels",         "option": "Ground Mounting Kit",      "productCode": "GROUNDMOUNTINGKIT",     "selected": false, "selectionLocked": false, "quantity": 1, "quantityEditable": false, "required": false, "minQuantity": null, "unitPrice": 3000 },
+    { "feature": "Inverters",      "option": "Inverter",                 "productCode": "INVERTER",              "selected": true,  "selectionLocked": false, "quantity": 1, "quantityEditable": false, "required": false, "minQuantity": null, "unitPrice": 1300 },
+    { "feature": "Inverters",      "option": "Microinverter",            "productCode": "MICROINVERTER",         "selected": false, "selectionLocked": false, "quantity": 5, "quantityEditable": false, "required": false, "minQuantity": 5,    "unitPrice": 200 },
+    { "feature": "Wiring",         "option": "Grid Disconnect Switch",   "productCode": "GRIDDISCONNECTSWITCH",  "selected": true,  "selectionLocked": true,  "quantity": 1, "quantityEditable": false, "required": true,  "minQuantity": null, "unitPrice": 100 },
+    { "feature": "Wiring",         "option": "Solar Disconnect Switch",  "productCode": "SOLARDISCONNECTSWITCH", "selected": true,  "selectionLocked": true,  "quantity": 1, "quantityEditable": false, "required": true,  "minQuantity": null, "unitPrice": 75 },
+    { "feature": "Wiring",         "option": "Wiring Kit",               "productCode": "WIRINGKIT",             "selected": true,  "selectionLocked": true,  "quantity": 1, "quantityEditable": false, "required": true,  "minQuantity": null, "unitPrice": 2500 },
+    { "feature": "Battery Backup", "option": "Charge Controller",        "productCode": "CHARGECONTROLLER",      "selected": false, "selectionLocked": false, "quantity": 1, "quantityEditable": false, "required": false, "minQuantity": null, "unitPrice": 350 },
+    { "feature": "Battery Backup", "option": "5kWh Battery",             "productCode": "5KWHBATTERY",           "selected": false, "selectionLocked": false, "quantity": 1, "quantityEditable": false, "required": false, "minQuantity": null, "unitPrice": 2700 },
+    { "feature": "Battery Backup", "option": "10kWh Battery",            "productCode": "10KWHBATTERY",          "selected": false, "selectionLocked": false, "quantity": 1, "quantityEditable": false, "required": false, "minQuantity": null, "unitPrice": 5000 }
+  ],
+
+  "_attributes": "SBQQ__ConfigurationAttribute__c records, READ FROM THE ORG on 2026-07-30 and confirmed in the live DOM. Target fields are ORG CUSTOM FIELDS with no namespace — System_Voltage__c, Hardware_Color__c, Measurement_Standard__c — all three confirmed present on SBQQ__QuoteLine__c as picklists, with exactly the values listed.",
+  "attributes": {
+    "global": {
+      "label": "System Voltage",
+      "field": "System_Voltage__c",
+      "value": "240V",
+      "picklistValues": ["120V", "240V"],
+      "required": true,
+      "_required": "SBQQ__Required__c = true on the Configuration Attribute. This has a consequence that reorders the scenario — see _requiredAttributeOrdering below. It is also what step 26 exercises.",
+      "_appliesToAllLines": "SBQQ__ApplyToProductOptions__c = true, so CPQ stamps the chosen value onto EVERY line in the bundle — the parent AND all ten options — not just the parent. MEASURED on 2026-07-30: after saving with 240V, all 11 SBQQ__QuoteLine__c rows carried System_Voltage__c = '240V'. The assertion is therefore over every line, not over the parent alone.",
+      "appliesToAllLines": true
+    },
+    "_drawer": "Option-level attributes, shown in a drawer that expands under an option row. CPQ renders the drawer toggle (<div id=\"drawerIcon\">) only on options that have attributes; every other row gets <div id=\"drawerPlaceHolder\"> instead. CONFIRMED on 2026-07-30: the three mounting kits have drawers holding exactly these two fields, in this order; no other option in the bundle has one.",
+    "drawer": [
+      {
+        "feature": "Panels",
+        "option": "Angled Roof Mounting Kit",
+        "values": [
+          { "label": "Hardware Color",       "field": "Hardware_Color__c",       "value": "Black",    "picklistValues": ["Silver", "Black", "Bronze"] },
+          { "label": "Measurement Standard", "field": "Measurement_Standard__c", "value": "Imperial", "picklistValues": ["Imperial", "Metric"] }
+        ]
+      },
+      {
+        "feature": "Panels",
+        "option": "Ground Mounting Kit",
+        "values": [
+          { "label": "Hardware Color",       "field": "Hardware_Color__c",       "value": "Silver", "picklistValues": ["Silver", "Black", "Bronze"] },
+          { "label": "Measurement Standard", "field": "Measurement_Standard__c", "value": "Metric", "picklistValues": ["Imperial", "Metric"] }
+        ]
+      }
+    ]
+  },
+
+  "_productRule": "SBQQ__ProductRule__c 'Enforce Microinverter Quantity', READ FROM THE ORG on 2026-07-30: Type = Validation, Active = true, Evaluation Event = Save, Conditions Met = All. Its two error conditions compare the 'Solar Panel Sum' and 'Microinverter Sum' summary variables (both Sum of Quantity, filtered on Product Code): fires when Solar Panel Sum > 0 AND Microinverter Sum < Solar Panel Sum. The message is asserted VERBATIM, including the absent full stop, which is how the org stores it.",
+  "productRule": {
+    "name": "Enforce Microinverter Quantity",
+    "message": "You must include at least as many microinverters as you have solar panels",
+    "_triggers": "Step 20 — Solar Panel 400W at 10 against Microinverter at 5.",
+    "_doesNotTrigger": "Step 21 raises Microinverter to 10, and step 31 swaps to Inverter so Microinverter Sum is 0 while Solar Panel Sum stays 10. Step 31 is the non-triggering half of the rule and is the reason it is not enough to test only that the rule fires."
+  },
+
+  "_errors": "Exact configurator messages, ALL READ FROM THE LIVE ORG on 2026-07-30 by provoking each one. Read from <div id=\"error_N\"> in the configurator's message region, untrimmed apart from surrounding whitespace.",
+  "errors": {
+    "minimumQuantity": "You have not met minimum quantity (5.00) for Solar Panel 400W.",
+    "panelsFeatureMinimum": "Solar Controller Hub: Too few options selected in Panels.",
+    "invertersFeatureMinimum": "Solar Controller Hub: Too few options selected in Inverters.",
+    "requiredAttribute": "Please review required configuration attributes",
+    "_requiredAttribute": "What CPQ returns when a required Configuration Attribute has no value. Asserted for step 26 by exact text; it also names 'configuration attributes' rather than the field, which is why step 26's stronger assertion is that the Save was rejected AND System Voltage is still empty."
+  },
+
+  "_requiredAttributeOrdering": "TWO findings from the org that between them change where the scenario's step 26 can be performed. Both are properties of the ORG, not of the test.\n\n1. CPQ VALIDATES REQUIRED ATTRIBUTES FIRST AND SHORT-CIRCUITS. MEASURED on 2026-07-30: with System Voltage empty, saving a configuration whose Solar Panel quantity was 4 returned only 'Please review required configuration attributes' — the minimum-quantity error never appeared. The same save with System Voltage set to 240V returned the minimum-quantity message verbatim. So every Save before the attribute is set is rejected for the same reason and none of the constraint messages the scenario asserts can ever surface.\n\n2. A REQUIRED ATTRIBUTE CANNOT BE CLEARED ONCE IT HAS A SAVED VALUE. MEASURED on 2026-07-31 by reading the picklist's options directly: on first entry it offers ['--None--','120V','240V']; after the value is saved and the configurator re-entered it offers only ['120V','240V']. CPQ withholds the empty choice from a required attribute that is already satisfied, so step 26's literal instruction — clear it, then Save — is not performable at step 26's position.\n\nHOW THE SPEC COVERS IT ANYWAY, WITHOUT DROPPING ANYTHING. The rejection step 26 was written to prove is asserted immediately after step 3, where the attribute is genuinely empty and the rejection is real. Step 26 keeps its position and asserts the other half — that the picklist no longer offers an empty choice, so the value cannot be removed. Step 27 keeps the Save-succeeds half plus the record assertion. Required-attribute behaviour therefore has all three of its parts covered: empty blocks Save, set cannot be cleared, set saves cleanly.",
+
+  "_steps": "Per-step inputs. Every quantity, product name, feature name and message the spec uses is read from this file — no literal of any of those kinds appears in the spec body.",
+  "steps": {
+    "belowMinimumQuantity": { "feature": "Panels",    "option": "Solar Panel 400W", "quantity": 4 },
+    "acceptedPanelQuantity": { "feature": "Panels",   "option": "Solar Panel 400W", "quantity": 10 },
+    "mountingKits": ["Angled Roof Mounting Kit", "Flat Roof Mounting Kit", "Ground Mounting Kit"],
+    "_mountingKits": "Steps 7-12 select all three, prove none of their quantities is editable, deselect all three to trip the Panels minimum, then re-select two. Flat Roof Mounting Kit stays deselected for the rest of the run, which is why it is absent from expectedFinalLines.",
+    "reselectedKits": ["Angled Roof Mounting Kit", "Ground Mounting Kit"],
+    "microinverterFloor": 5,
+    "_microinverterFloor": "SBQQ__MinQuantity__c on the Microinverter Product Option, and also the quantity the cell defaults to. Step 14 asserts the cell reads this AND is editable above it; step 16 sets it explicitly so the value is committed rather than merely displayed.",
+    "microinverterAtRuleBreach": 5,
+    "microinverterSatisfyingRule": 10,
+    "lockedWiringOptions": ["Grid Disconnect Switch", "Solar Disconnect Switch", "Wiring Kit"],
+    "_lockedWiringOptions": "Steps 17-19. All three are SBQQ__Required__c = true, so CPQ auto-selects them and renders the control aria-disabled. Each must survive a deselect attempt with its quantity unchanged at 1.",
+    "batteryBackup": [
+      { "feature": "Battery Backup", "option": "Charge Controller", "quantity": 1,  "quantityEditable": false },
+      { "feature": "Battery Backup", "option": "5kWh Battery",      "quantity": 12, "quantityEditable": true },
+      { "feature": "Battery Backup", "option": "10kWh Battery",     "quantity": 7,  "quantityEditable": true }
+    ],
+    "_batteryBackup": "Steps 22-23. Charge Controller's Product Option fixes SBQQ__Quantity__c = 1, so its quantity stays read-only even once selected — asserted, because that is the difference between 'quantity is locked' and 'the option is unselected'. The two batteries leave it null and become editable on selection.",
+    "finalInverter": "Inverter",
+    "replacedInverter": "Microinverter",
+    "_finalInverter": "Step 31. Swapping back to Inverter leaves Microinverter Sum at 0 while Solar Panel Sum is still 10, which is the product rule's non-triggering condition — the assertion is that the Save succeeds with no rule error."
+  },
+
+  "_expectedFinalLines": "The quote's lines after step 31, CONFIRMED to be reachable by driving the org on 2026-07-30. Eleven rows: one bundle parent plus ten options. Flat Roof Mounting Kit is absent (deselected at step 10, never re-selected) and Microinverter is absent (swapped for Inverter at step 31). The spec DERIVES the total from this array rather than asserting a literal 11, and asserts per product — a total reached through the wrong distribution is a passing test that proves nothing.\n\nThe parent is distinguished from its options by SBQQ__RequiredBy__c: null on the parent, populated on every option. MEASURED, not assumed.",
+  "expectedFinalLines": [
+    { "productCode": "SOLARCONTROLLERHUB",    "name": "Solar Controller Hub",     "quantity": 1,  "bundleParent": true },
+    { "productCode": "SOLARPANEL400W",        "name": "Solar Panel 400W",         "quantity": 10, "bundleParent": false },
+    { "productCode": "ANGLEDROOFMOUNTINGKIT", "name": "Angled Roof Mounting Kit", "quantity": 1,  "bundleParent": false },
+    { "productCode": "GROUNDMOUNTINGKIT",     "name": "Ground Mounting Kit",      "quantity": 1,  "bundleParent": false },
+    { "productCode": "INVERTER",              "name": "Inverter",                 "quantity": 1,  "bundleParent": false },
+    { "productCode": "GRIDDISCONNECTSWITCH",  "name": "Grid Disconnect Switch",   "quantity": 1,  "bundleParent": false },
+    { "productCode": "SOLARDISCONNECTSWITCH", "name": "Solar Disconnect Switch",  "quantity": 1,  "bundleParent": false },
+    { "productCode": "WIRINGKIT",             "name": "Wiring Kit",               "quantity": 1,  "bundleParent": false },
+    { "productCode": "CHARGECONTROLLER",      "name": "Charge Controller",        "quantity": 1,  "bundleParent": false },
+    { "productCode": "5KWHBATTERY",           "name": "5kWh Battery",             "quantity": 12, "bundleParent": false },
+    { "productCode": "10KWHBATTERY",          "name": "10kWh Battery",            "quantity": 7,  "bundleParent": false }
+  ],
+
+  "_absentFinalLines": "Asserted explicitly by product code, never inferred from the total, for the same reason home-security.json writes out its zero-asset case.",
+  "absentFinalLines": ["FLATROOFMOUNTINGKIT", "MICROINVERTER"],
+
+  "_persistence": "A finding that shapes every API assertion in the spec. The configurator's own Save commits to the QUOTE LINE EDITOR, not to the database. MEASURED on 2026-07-30: immediately after a successful configurator Save the quote had ZERO SBQQ__QuoteLine__c rows; after the editor's Quick Save it had eleven. So the spec Quick-Saves in the editor after every successful configurator Save whose outcome it then reads back over the API. Polling instead of Quick Saving would poll forever against rows that were never written."
+}

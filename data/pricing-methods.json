@@ -1,0 +1,630 @@
+{
+  "_file": "Scenario data for tests/pricing-methods/ — CPQ's PRICING METHODS (Product2.SBQQ__PricingMethod__c), as distinct from the price RULES in data/pricing-rules.json. The two are separate axes: a rule overwrites a price after CPQ has resolved one, a pricing method decides how CPQ resolves it in the first place. Nothing here is created by the suite; every record below is org configuration the tests read and never write.",
+  "_provenance": "Everything marked READ FROM THE ORG was queried from the Developer org (coxautomotive-c-dev-ed) on 2026-08-02 over the REST API. Everything marked DERIVED follows arithmetically from a READ value and is written out in full rather than computed in the spec, so a boundary expectation cannot silently follow a boundary that moved. Anything still unknown ships as [SPECIFY] and fails by name through requireNumber/requireString — an unconfirmed number must not be able to pass as a green test.",
+
+  "timeouts": {
+    "bundleOptionSessionMinutes": 25,
+    "_bundleOptionSessionMinutes": "[VERIFY] Reasoned, not measured. This spec pays a configurator entry (~1 minute of cold start, measured by the small-business-ssd spec) on top of the Quote Line Editor's own, plus two drawer opens and two commits. Longer than the others for that reason.",
+    "contractedPricingSessionMinutes": 20,
+    "_contractedPricingSessionMinutes": "[VERIFY] Reasoned, not measured. Three tests, two quotes, four simple products each, one quantity edit and four drawer opens for evidence. No configurator entry anywhere, so this should be the fastest spec in the set.",
+    "costPlusMarkupSessionMinutes": 20,
+    "_costPlusMarkupSessionMinutes": "[VERIFY] Reasoned, not measured. One editor cold load, one simple product, three drawer writes and three commits. The block-pricing spec measures 2.4 minutes for a comparable shape; twenty is a backstop for a slow org, not a target.",
+    "percentOfTotalSessionMinutes": 20,
+    "_percentOfTotalSessionMinutes": "[VERIFY] Reasoned, not measured. Test 1 is three simple products in one editor session; test 2 adds two configurator entries for the laptop bundles plus a second selection round, which the small-business-ssd spec measures at roughly a minute each. Tighten against a real run.",
+    "blockPricingSessionMinutes": 20,
+    "_blockPricingSessionMinutes": "MEASURED against the Developer org on 2026-08-02, three times at --workers=1: eleven quantities and three commits took 3.7 minutes, five quantities and three commits took 2.6, and the current six quantities and four commits took 2.4. The last two are the point — ADDING a step and a commit did not cost measurable time, it came in FASTER than the shorter sweep, so run-to-run variance on this org is larger than a quantity edit. Fixed costs dominate: one Quote Line Editor cold load and one product selection round are most of the run. Treat per-step estimates here as noise and trim for coverage reasons rather than for time. The estimate that preceded the first run, twelve to fifteen minutes reasoned from the configurator suite's 7.9, was roughly four times too pessimistic: re-entering the editor is what costs a minute and this flow enters it once. The budget stays at 20 rather than being tightened onto any of the three measurements — a timeout is a backstop for a slow org, and sizing it to a fast run on a quiet org converts org latency into a red build."
+  },
+
+  "closeDateOffsetDays": 90,
+  "_closeDateOffsetDays": "Same as data/pricing-rules.json. An Opportunity close date in the past is accepted by the API but makes the record look stale in the org; nothing in these scenarios depends on the value.",
+
+  "accounts": {
+    "genepoint": {
+      "name": "GenePoint",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hgAAA, Industry = 'Biotechnology'. A LITERAL, not a predicate, and Section 1.4 says why: the contracted price records SIT ON THIS ACCOUNT, so the scenario is meaningless anywhere else. There is nothing to resolve.",
+      "needs": "Source scenario 7 — the account carrying both contracted price records.",
+      "_notRetail": "Biotechnology, so the quote comes out ungrouped and quoteSimpleProducts' flat-quote path holds."
+    },
+
+    "contractedOutOfScope": {
+      "name": "Burlington Textiles Corp of America",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hXAAQ, Industry = 'Banking'. Any account OTHER than GenePoint works; this one is pinned because the rest of this suite already uses it and it is known to trip no price rule.",
+      "predicate": "Industry != 'Retail' AND Industry != null AND Name != 'GenePoint'",
+      "needs": "Test 3 — an account with NO contracted price records, to prove neither mechanism travels beyond the account it is configured on.",
+      "_mustNotBeGenePoint": "The predicate excludes GenePoint explicitly. Resolving to it would make the out-of-scope test assert that contracted pricing does NOT apply on the very account it is configured on — which would fail, but for a reason that reads like a product defect rather than a data-file mistake."
+    },
+
+    "percentOfTotal": {
+      "name": "Burlington Textiles Corp of America",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hXAAQ, Industry = 'Banking'. Pinned rather than left to the predicate, which matches many accounts.",
+      "predicate": "Industry != 'Retail' AND Industry != null",
+      "needs": "An account that produces an UNGROUPED quote and trips no active price rule. Percent-of-total is a property of the PRODUCT, so no account-level condition applies.",
+      "_industryNotRetail": "Required, and the reason is structural rather than about pricing: a Retail account gets two quote line groups from org automation, and quoteSimpleProducts drives the FLAT-quote path with groupName = null and allowEmpty. createSimpleQuote throws by name on a Retail account rather than letting a grouped quote reach a locator that expects no groups."
+    },
+
+    "blockPricing": {
+      "name": "Burlington Textiles Corp of America",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hXAAQ, Industry = 'Banking', SLA = 'Silver', NumberOfEmployees = 9000. Pinned rather than left to the predicate, which matches many accounts and would let the scenario run against a different one each time the catalogue changes.",
+      "predicate": "Industry != 'Retail' AND Industry != null",
+      "needs": "An account that produces an UNGROUPED quote and trips no active price rule. Block pricing is a property of the PRODUCT, so no account-level condition applies — the only requirements are negative ones.",
+      "_sharedWithPercentOfTotal": "The percentOfTotal entry below pins the same record, and that is safe: every assertion in this suite is scoped by SBQQ__Quote__c, never by AccountId, so two specs quoting one account cannot affect each other. The same reasoning data/pricing-rules.json records for anyNonRetail and negativeControl.",
+      "_whyUngroupedMatters": "READ FROM THE ORG and already enforced in src/flows/createSimpleQuote.js: a record-triggered Flow creates quote line groups when the Account's Industry is 'Retail', and a grouped quote renders a different Quote Line Editor. Every locator in this spec passes groupName = null, so a grouped quote would search a div.group that does not exist. createSimpleQuote throws by name on a Retail account rather than letting that happen. (This settles the open question about The Fernando Estate — 001bm00000hd6hiAAA, Industry = 'Retail' — which is why it cannot be used here.)",
+      "_whyNoRuleCanFire": "READ FROM THE ORG on 2026-08-02: all eight active SBQQ__PriceRule__c records condition on a Quote Line product code — NETBOOK, MARKETINGPLATFORMLICENSE, SDCARD*, SMARTBLINDS, LAPTOP1*, SSD*, *WEBCAM* — or on the netbook lookup. TONERRECYCLE matches none of them, so nothing can overwrite a block-resolved price and every number below comes unambiguously from the tiers."
+    }
+  },
+
+  "products": {
+    "desktopComputer": {
+      "name": "Desktop Computer",
+      "productCode": "DESKTOPCOMPUTER",
+      "pricebookPrice": 700,
+      "bundle": true,
+      "_bundle": "READ FROM THE ORG: 01tbm00000A9phFAAR, SBQQ__ConfigurationType__c = 'Allowed', SBQQ__ConfigurationEvent__c = 'Always'. It opens the configurator, so it goes to quoteSimpleProducts as a BUNDLE and cannot share a selection round with simple products."
+    },
+
+    "cpu34": {
+      "name": "CPU 3.4GHz i7",
+      "productCode": "CPU34GHZI7",
+      "pricebookPrice": 425,
+      "bundle": false,
+      "_role": "The unit-price-override option. Inside the bundle it should price at the option record's 50; as a standalone line on the SAME quote it should price at its own 425. The pair on one quote is what makes the comparison airtight — same org, same price book, same calculation run.",
+      "_pricebookPrice": "READ FROM THE ORG: 425, which EXCEEDS the 50 override. The guard asserts that ordering explicitly, because with the override at or above the price book price there would be no difference to observe and the test would pass while demonstrating nothing."
+    },
+
+    "cpu28": {
+      "name": "CPU 2.8GHz i7",
+      "productCode": "CPU28GHZI7",
+      "pricebookPrice": 375,
+      "bundle": false,
+      "_role": "NOT USED as a Bundled option, deliberately — see the scenario's _whyNotCpu28AsABundledOption. It shares the mutually exclusive 'Processor' feature with the override product, so selecting it throws the override away. Kept here because it is the bundle's DEFAULT processor and therefore what a reader will see on an unmodified configuration.",
+      "_pricebookPrice": "READ FROM THE ORG: 375, SBQQ__Bundled__c = true on PO-000024."
+    },
+
+    "opticalDrive": {
+      "name": "Optical Drive",
+      "productCode": "OPTICALDRIVE",
+      "pricebookPrice": 45,
+      "bundle": false,
+      "_role": "Bundled option 2, replacing CPU28GHZI7. In a different feature from the override, so the two do not compete.",
+      "_pricebookPrice": "READ FROM THE ORG on 2026-08-02, off a saved quote line: list 45 with SBQQ__Bundled__c = true and SBQQ__RequiredBy__c set. NON-ZERO, which is what makes the zeroed waterfall an override rather than an absence of price."
+    },
+
+    "ram8": {
+      "name": "RAM 8GB",
+      "productCode": "RAM8GB",
+      "pricebookPrice": 50,
+      "bundle": false,
+      "_role": "Bundled option 2. SBQQ__Bundled__c = true on PO-000031. Two Bundled options rather than one is what makes 'options flagged Bundled zero the waterfall' a claim about the FLAG rather than about one option.",
+      "_pricebookPrice": "READ FROM THE ORG: 50, non-zero."
+    },
+
+    "monitor1080p": {
+      "name": "Monitor 1080p",
+      "productCode": "MONITOR1080P",
+      "pricebookPrice": 250,
+      "bundle": false,
+      "_pricebookPrice": "READ FROM THE ORG on 2026-08-02: 250 on the Standard Price Book, Product Family 'Hardware'. The family matters — it keeps this product outside CP-00001's 'Miscellaneous' filter, so an unadjusted line here means NO contracted price of any kind reached it.",
+      "_role": "The expiration scenario's product. CP-00002 prices it at 200 and expired on 2026-08-01, so a line created today must come back at this 250."
+    },
+
+    "printerToner": {
+      "name": "Printer Toner",
+      "productCode": "PRINTERTONER",
+      "pricebookPrice": 125,
+      "bundle": false,
+      "_pricebookPrice": "READ FROM THE ORG: 125 on the Standard Price Book, Product Family 'Consumable'. The family matters — it is what keeps this product OUTSIDE the Miscellaneous filter, which is what makes the no-stacking assertion meaningful.",
+      "_role": "The product-specific contracted price target: CP-00000 sets it to a flat 100."
+    },
+
+    "headphones": {
+      "name": "Headphones",
+      "productCode": "HEADPHONES",
+      "pricebookPrice": 50,
+      "bundle": false,
+      "_pricebookPrice": "READ FROM THE ORG: 50, Product Family 'Miscellaneous' — so it is matched by CP-00001's filter and should come back at 47.50. Asserted relationally against its own list price rather than against that literal.",
+      "_role": "Filter-matched product 1."
+    },
+
+    "usbMic": {
+      "name": "USB Microphone",
+      "productCode": "USBMIC",
+      "pricebookPrice": 15,
+      "bundle": false,
+      "_pricebookPrice": "READ FROM THE ORG: 15, Product Family 'Miscellaneous' — matched by the same filter, expected at 14.25. A second filter-matched product is what makes the claim about the FILTER rather than about one product.",
+      "_role": "Filter-matched product 2."
+    },
+
+    "shippingInsurance": {
+      "name": "Shipping Insurance",
+      "productCode": "SHIPPINGINSURANCE",
+      "pricebookPrice": 500,
+      "bundle": false,
+      "_name": "READ FROM THE ORG: Product2 01tbm00000A9phYAAR, simple (SBQQ__ConfigurationType__c null).",
+      "_pricebookPrice": "READ FROM THE ORG: 500 on the Standard Price Book. This doubles as the CAP — with SBQQ__DynamicPricingConstraint__c = 'List price is maximum' the derived price cannot exceed it. Asserted by reading PricebookEntry live rather than against this literal, so a catalogue reprice moves the cap and the test with it.",
+      "percentOfTotal": {
+        "pricingMethod": "Percent Of Total",
+        "percent": 10,
+        "base": "Net",
+        "category": "Insurance",
+        "constraint": "List price is maximum",
+        "_source": "READ FROM THE ORG: SBQQ__SubscriptionPercent__c = 10, SBQQ__SubscriptionBase__c = 'Net', SBQQ__SubscriptionCategory__c = 'Insurance', SBQQ__DynamicPricingConstraint__c = 'List price is maximum'.",
+        "_baseIsNet": "'Net' rather than 'List' is what makes the discount step meaningful: a discount on a contributing line changes the base, and therefore the derived price. Against a List base it would not.",
+        "_categoryMembers": "READ FROM THE ORG: exactly five products carry SBQQ__SubscriptionCategory__c = 'Insurance' — COPYMACHINE (2000), FIREWALL (2400), LAPTOP13 (1300), LAPTOP15 (1500) and SHIPPINGINSURANCE itself. That matches the source document's 'five products' exactly.",
+        "_theAwkwardPart": "Of the four contributors, THREE ARE BUNDLES (COPYMACHINE, LAPTOP13, LAPTOP15) and the fourth (FIREWALL) is SBQQ__PricingMethod__c = 'Cost'. There is no simple, List-priced contributor in this category. That is why test 1 uses FIREWALL and logs what a Cost-method line actually contributes, and why test 2 uses the two laptop bundles, whose List prices make the cap arithmetic predictable.",
+        "_categoryPicklistWarning": "SBQQ__QuoteLine__c.SBQQ__SubscriptionCategory__c offers only [Hardware|Software] in this org, while Product2's offers [Hardware|Software|Insurance|Warranty]. So category membership is determined from Product2 through the line's product, NOT from the line field — reading the line field would find 'Insurance' missing and conclude no line carries the category."
+      }
+    },
+
+    "firewall": {
+      "name": "Firewall",
+      "productCode": "FIREWALL",
+      "pricebookPrice": 2400,
+      "bundle": false,
+      "costPricing": {
+        "pricingMethod": "Cost",
+        "unitCost": 2100,
+        "_unitCost": "READ FROM THE ORG on 2026-08-02: the single active SBQQ__Cost__c record for FIREWALL has SBQQ__UnitCost__c = 2100. Every expected price in the cost-plus-markup scenario is this number plus the markup, so they all move together with it — fix whichever of the two is stale rather than editing the expectations.",
+        "_pricingMethod": "READ FROM THE ORG: SBQQ__PricingMethod__c = 'Cost'. Note this is also what makes FIREWALL an awkward percent-of-total contributor — see shippingInsurance.percentOfTotal._theAwkwardPart."
+      },
+      "_role": "Test 1's contributor, and Section 6's cost-plus-markup subject. Carries SBQQ__SubscriptionCategory__c = 'Insurance' AND SBQQ__PricingMethod__c = 'Cost' — the exact combination that makes a literal expectation for the derived price unsafe, and the reason Section 4 asserts relationally.",
+      "_pricebookPrice": "READ FROM THE ORG: 2400. This is its LIST price; what it NETS under Cost pricing with no markup entered is an open question the spec logs on its first reading rather than guessing at."
+    },
+
+    "laptop13": {
+      "name": "13\" Laptop",
+      "productCode": "LAPTOP13",
+      "pricebookPrice": 1300,
+      "bundle": true,
+      "_bundle": "READ FROM THE ORG: SBQQ__ConfigurationType__c = 'Allowed', SBQQ__ConfigurationEvent__c = 'Always'. It opens the configurator and must be passed to quoteSimpleProducts as a BUNDLE, not a simple product.",
+      "_role": "Test 2 contributor. List-priced, so the cap arithmetic is predictable in a way FIREWALL's is not.",
+      "_optionsDoNotContribute": "READ FROM THE ORG: the laptop bundles' options are SSD drives, which carry SBQQ__SubscriptionCategory__c = 'Warranty', not 'Insurance'. So default-selected option lines do not join this base and the predicted quantities below hold. The assertion sums whatever DOES carry the category, so it stays correct even if that changes — only the predicted cap-crossing points would move."
+    },
+
+    "laptop15": {
+      "name": "15\" Laptop",
+      "productCode": "LAPTOP15",
+      "pricebookPrice": 1500,
+      "bundle": true,
+      "_role": "Test 2's second contributor. Two contributors rather than one is what makes 'the base is a SUM' a claim rather than a coincidence.",
+      "_bundle": "READ FROM THE ORG, same configuration as LAPTOP13."
+    },
+
+    "control": {
+      "name": "Router",
+      "productCode": "ROUTER",
+      "pricebookPrice": 100,
+      "bundle": false,
+      "_role": "The UNCATEGORIZED control. Its quantity is raised and the derived price must not move — which is the whole exclusion claim.",
+      "_whyRouter": "READ FROM THE ORG: ROUTER carries NO SBQQ__SubscriptionCategory__c at all, is List-priced, is simple, and is in Family 'Hardware' rather than 'Miscellaneous'. The pricing-rules suite already established that no active price rule can move its price. Its absence from the category is asserted by the guard, because a silent assignment would make the exclusion test pass while proving the opposite."
+    },
+
+    "tonerRecycling": {
+      "name": "Toner Recycling",
+      "_name": "READ FROM THE ORG: Product2 01tbm00000A9phWAAR. The product selection screen searches by NAME, so this is the string the flow types; the code below is what every quote line is addressed by.",
+      "productCode": "TONERRECYCLE",
+      "pricebookPrice": 0,
+      "_pricebookPrice": "READ FROM THE ORG: PricebookEntry 01ubm000002fAKpAAM on the Standard Price Book (01sbm000007eqofAAA) has UnitPrice = 0, IsActive = true, UseStandardPrice = false. This zero is the whole point of the first assertion — a block-priced product resolves its price from a tier, so its price book price is never consulted, and leaving it at 0 makes that visible rather than merely true.",
+      "bundle": false,
+      "_bundle": "READ FROM THE ORG: SBQQ__ConfigurationType__c and SBQQ__ConfigurationEvent__c are both null, so this product is NOT configurable. It returns to the selection screen after being ticked and is added as a SIMPLE product rather than through the configurator. src/utils/pricingConfig.js warns if that ever changes.",
+
+      "blockPricing": {
+        "pricingMethod": "Block",
+        "_pricingMethod": "READ FROM THE ORG: Product2.SBQQ__PricingMethod__c = 'Block'. Asserted by the guard before the browser opens, because every expected price below is a tier price and a product priced any other way would fail the whole sweep without saying why.",
+        "overageRateField": "OverageRate__c",
+        "_overageRateField": "READ FROM THE ORG via the SBQQ__BlockPrice__c describe: a CUSTOM currency field labelled 'OverageRate'. Custom, so it cannot be guessed — the guard selects it by name precisely so a wrong name comes back as INVALID_FIELD naming the field, rather than as an undefined that reads like an unpopulated rate.",
+
+        "tiers": [
+          {
+            "label": "Small Pickup",
+            "lowerBound": 1,
+            "upperBound": 21,
+            "price": 25,
+            "overageRate": null,
+            "_source": "READ FROM THE ORG: SBQQ__BlockPrice__c a02bm00000VCHG9AAP.",
+            "_bounds": "The upper bound is EXCLUSIVE and the next tier's lower bound is the same number, which is what leaves no quantity gap between them: 20 resolves here, 21 resolves to the next tier. That adjacency is a thing the sweep tests, not an assumption it makes."
+          },
+          {
+            "label": "Large Pickup",
+            "lowerBound": 21,
+            "upperBound": 51,
+            "price": 35,
+            "overageRate": null,
+            "_source": "READ FROM THE ORG: SBQQ__BlockPrice__c a02bm00000VCHGAAA5.",
+            "_overageRate": "Empty, and asserted empty. A rate on a BOUNDED tier would move prices inside the tiered range, which is exactly the leak the last step of Scenario 2 exists to rule out."
+          },
+          {
+            "label": "Overage",
+            "lowerBound": 51,
+            "upperBound": null,
+            "price": 45,
+            "overageRate": 1,
+            "_source": "READ FROM THE ORG: SBQQ__BlockPrice__c a02bm00000VCHXtAAP.",
+            "_upperBound": "null is MEANINGFUL here rather than missing — an open-ended top tier is what makes the overage rate reachable at all. The guard compares it as null rather than skipping it.",
+            "_overageRate": "READ FROM THE ORG: OverageRate__c = 1, charged per unit above the lower bound of 51. So quantity 51 accrues nothing and prices at the tier price of 45."
+          }
+        ]
+      }
+    }
+  },
+
+  "scenarios": {
+    "bundleOptionPricing": {
+      "_scenario": "Source scenario 5. One test, one editor session, one configurator entry.",
+      "opportunityBaseName": "E2E Bundle Option Pricing",
+      "bundleKey": "desktopComputer",
+
+      "_configAsConfigured": "READ FROM THE ORG on 2026-08-02, the DESKTOPCOMPUTER bundle (01tbm00000A9phFAAR, SBQQ__ConfigurationType__c = 'Allowed'). PO-000025 gives CPU34GHZI7 an SBQQ__UnitPrice__c override of 50 against a standalone price of 425. PO-000024 (CPU28GHZI7) and PO-000031 (RAM8GB) both carry SBQQ__Bundled__c = true, with standalone prices of 375 and 50.",
+
+      "_whyTheNonZeroPricesMatter": "The Bundled options' price book prices are asserted NON-ZERO by the guard, and that check is what gives the test its meaning. 'Included' is only an OVERRIDE if there was a price to override — with a zero price book entry the waterfall would be zero anyway and the assertion would prove nothing at all.",
+
+      "expect": {
+        "override": {
+          "productKey": "cpu34",
+          "optionUnitPrice": 50,
+          "_optionUnitPrice": "READ FROM THE ORG: SBQQ__ProductOption__c PO-000025's SBQQ__UnitPrice__c. The bundled copy's SBQQ__ListPrice__c must equal this.",
+          "standalonePrice": 425,
+          "_standalonePrice": "READ FROM THE ORG: the same product's own PricebookEntry.UnitPrice. The standalone copy on the SAME quote must equal THIS, and the two must differ — which is the comparison the whole scenario rests on. Asserted against the value read live rather than this literal.",
+          "_noDiscount": "Neither copy may carry a populated discount field. That is what attributes the delta to the OPTION OVERRIDE rather than to a discount, and it is what the source document's step 9 is really asking for."
+        },
+
+        "_whyNotCpu28AsABundledOption": "MEASURED on 2026-08-02 and it cost a run. CPU34GHZI7 (the override) and CPU28GHZI7 are both in the DESKTOPCOMPUTER bundle's 'Processor' feature, which is MUTUALLY EXCLUSIVE — selecting one deselects the other. The first version of this scenario selected the override and then CPU28GHZI7 as a Bundled option, which silently threw the override away: the saved quote held CPU34GHZI7 only as the standalone line at 425, and the test failed reporting one copy where it needed two. The Bundled options are therefore drawn from OTHER features, so nothing competes with the override.",
+
+        "bundled": {
+          "productKeys": ["ram8", "opticalDrive"],
+          "includedLabel": "Included",
+          "_includedLabel": "The ONE claim in this set that can only be made in the UI: the List Unit Price cell on a Bundled line renders the literal string 'Included'. The data model holds no such value — the record carries zeroes — so this is asserted on the cell text with a message saying exactly that.",
+          "zeroFields": [
+            "SBQQ__NetTotal__c",
+            "SBQQ__NetPrice__c",
+            "SBQQ__CustomerPrice__c",
+            "SBQQ__RegularPrice__c"
+          ],
+          "_zeroFields": "MEASURED on 2026-08-02, the full waterfall on two Bundled lines: RAM8GB came back list=50 net=0 netTotal=0 customer=0 regular=0, and OPTICALDRIVE list=45 net=0 netTotal=0 customer=0 regular=0. So a Bundled option zeroes EVERYTHING BELOW the list price. SBQQ__NetTotal__c is the one that matters most — the FINAL price, which is what 'included in the bundle price' means — and the other three are asserted beside it because they were seen, not assumed. This list was widened from NetTotal alone only AFTER the run above printed the values; it was deliberately narrow before that.",
+          "_listPriceIsNotZeroed": "CONFIRMED, and it corrected this list. SBQQ__Bundled__c does NOT zero SBQQ__ListPrice__c: MEASURED on 2026-08-02, every Bundled option on the DESKTOPCOMPUTER quote kept its own list price (CPU28GHZI7 375, RAM8GB 50, OPTICALDRIVE 45) while carrying SBQQ__Bundled__c = true. An earlier version of this list asserted a zero list price and failed on a line that was behaving correctly. That is consistent with the UI claim below rather than in tension with it: the List Unit Price CELL renders the word 'Included' precisely BECAUSE the underlying list price is a real number that must not be shown as a charge.",
+          "_notNarrowedByGuesswork": "The narrowing is to the field that was confirmed to zero, not to whatever made the test pass. SBQQ__NetPrice__c, SBQQ__CustomerPrice__c and SBQQ__RegularPrice__c are left OUT rather than assumed — none of them has been measured on a Bundled line, and adding an unmeasured field would be the same mistake in the opposite direction. Add them once seen; the spec logs the whole waterfall on every run so the values are there to read.",
+          "quantityStep": null,
+          "_quantityStep": "NOT PERFORMABLE against this bundle, and recorded rather than faked. The step would raise a Bundled option's quantity and assert the charge does not reappear — but MEASURED on 2026-08-02, the click-to-edit quantity cell refuses to open on RAM8GB, and the reason is already documented in MEASURED 2026-07-30: a bundle option's quantity is editable IF AND ONLY IF the option is selected and its SBQQ__ProductOption__c.SBQQ__Quantity__c is NULL. PO-000031 (RAM8GB) and PO-000032 (OPTICALDRIVE) both carry SBQQ__Quantity__c = 1, so their quantities are FIXED by configuration and there is no edit to make. Reaching for force-click or an API patch would manufacture a state the UI does not allow, which is worse than not testing it. To restore the step, point it at a Bundled option whose product option record leaves SBQQ__Quantity__c null — this bundle has none."
+        },
+
+        "evidence": "bundle-option-pricing",
+        "_drawerEvidence": "One lineDrawer() shot per Bundled line, as the human-readable companion to the record assertions. NOT the check: the drawer omits Net Unit Price entirely, so a UI-driven waterfall check would skip it silently and report a clean pass having never looked at it."
+      }
+    },
+
+    "contractedPricing": {
+      "_scenario": "Source scenario 7 in full; source scenario 8 (expiration windowing) ships as a documented test.fixme gap — see _scenario8 below.",
+      "opportunityBaseName": "E2E Contracted Pricing",
+
+      "_configAsConfigured": "READ FROM THE ORG on 2026-08-02, all three SBQQ__ContractedPrice__c records on GenePoint (001bm00000hd6hgAAA): CP-00000 sets PRINTERTONER to a flat SBQQ__Price__c of 100; CP-00001 carries SBQQ__FilterField__c = 'Product Family', SBQQ__FilterValue__c = 'Miscellaneous', SBQQ__Operator__c = 'equals' and SBQQ__Discount__c = 5, naming no product at all; CP-00002 sets MONITOR1080P to 200 with an expiration of 2026-12-31.",
+
+      "_nonOverlapIsLoadBearing": "PRINTERTONER is in Product Family 'Consumable', NOT 'Miscellaneous'. That is what makes the no-stacking claim TESTABLE: if the product-specific record's product were also matched by the filter, 'the two do not stack' could not be told apart from 'only one of them happened to apply'. The guard asserts the non-overlap explicitly rather than trusting it.",
+
+      "expect": {
+        "inScope": {
+          "_test": "Test 1 — both mechanisms apply on the named account, and neither touches the list price.",
+          "account": "genepoint",
+          "evidence": "contracted-in-scope",
+          "commit": "quickSave",
+
+          "specific": {
+            "productKey": "printerToner",
+            "contractedPrice": 100,
+            "_contractedPrice": "READ FROM THE ORG: CP-00000's SBQQ__Price__c. Asserted on SBQQ__SpecialPrice__c, with SBQQ__ListPrice__c asserted UNCHANGED at the price book's 125 — the PAIR is the claim. Contracted pricing writes to the special price only, so asserting the special price alone would not distinguish it from a rule that overwrote both.",
+            "_notTheDiscountedPrice": "Also asserted NOT to equal its price book price less the filter's 5%. Asserting only the flat price would pass if the two happened to coincide; asserting both halves is what proves the mechanisms did not stack."
+          },
+
+          "filterMatched": {
+            "productKeys": ["headphones", "usbMic"],
+            "discountPercent": 5,
+            "_assertion": "RELATIONALLY, per product: each line's SBQQ__SpecialPrice__c equals its OWN list price less 5%, computed from the line's own SBQQ__ListPrice__c rather than from two literals. That survives a catalogue reprice, which two literals would not. Two products rather than one is what makes 'every product matching the filter' a claim about the FILTER rather than about a product."
+          },
+
+          "control": {
+            "productKey": "control",
+            "_role": "ROUTER is Product Family 'Hardware' — outside the filter — and has no contracted price record of its own. It must carry no contracted adjustment at all, which is the relational form no-rule-fires.spec.js already uses: SBQQ__ListPrice__c equal to SBQQ__OriginalPrice__c and no special price."
+          }
+        },
+
+        "quantity": {
+          "_test": "Test 2 — the percentage relationship still holds at a different quantity, so the discount is per-unit rather than a one-off adjustment.",
+          "productKey": "headphones",
+          "quantity": 4,
+          "_quantity": "[VERIFY] Any quantity other than 1 satisfies the claim; 4 is chosen to be unambiguous against a rounding coincidence. Continues in test 1's session rather than seeding a second quote.",
+          "evidence": "contracted-quantity",
+          "commit": "save"
+        },
+
+        "outOfScope": {
+          "_test": "Test 3 — neither mechanism applies to an account outside their scope.",
+          "account": "contractedOutOfScope",
+          "evidence": "contracted-out-of-scope",
+          "commit": "quickSave",
+          "_assertion": "All four lines have SBQQ__ListPrice__c equal to SBQQ__OriginalPrice__c and no contracted special price. Relational rather than literal, so the check survives a catalogue reprice — the claim is 'nothing adjusted these', not 'these cost exactly N'."
+        }
+      },
+
+      "_scenario8": "EXPIRATION WINDOWING — NOW BUILT, because the two records it needs were STAGED BY HAND on 2026-08-02. It shipped as a @wip test.fixme until then: the blocker was never technical, it was that a test cannot create a record in the past, and creating the contracted price itself would have violated the read-only configuration policy.",
+
+      "expiration": {
+        "_staging": "HAND-STAGED, and this suite must never recreate it. CP-00002 on GenePoint prices MONITOR1080P at 200 and its SBQQ__ExpirationDate__c was moved to 2026-08-01 — one day before the run date — so its window is closed. Quote Q-00415 was created while the price was still live and its MONITOR1080P line carries the contracted price stamped onto it.",
+
+        "account": "genepoint",
+        "productKey": "monitor1080p",
+        "contractedPrice": 200,
+        "expiredOn": "2026-08-01",
+
+        "grandfatheredQuoteName": "Q-00415",
+        "_grandfatheredQuoteName": "A QUOTE NUMBER, which Section 1.4 otherwise forbids — and the exception is deliberate. That rule exists because quote numbers are AUTO-GENERATED by runs and are not reproducible across orgs, so a test that referenced one would be depending on its own residue. This one is different in kind: it is a hand-staged FIXTURE, deliberately created before the expiry and deliberately kept, in the same category as the Account names this suite resolves by literal. It is READ ONLY — registered through cpqData.registerExisting() so the sweeper can never touch it — and the spec fails by name if it is missing rather than quietly skipping.",
+
+        "expect": {
+          "grandfathered": {
+            "SBQQ__ListPrice__c": 250,
+            "SBQQ__SpecialPrice__c": 200,
+            "SBQQ__SpecialPriceType__c": "Contracted Price",
+            "_note": "READ FROM THE ORG on 2026-08-02 off Q-00415's line: list=250, orig=250, special=200, type='Contracted Price', net=200. The TYPE is the strongest signal here and is asserted alongside the number — 200 could in principle arrive from some other mechanism, but 'Contracted Price' names the one that produced it."
+          },
+
+          "afterExpiry": {
+            "SBQQ__ListPrice__c": 250,
+            "specialPriceTypeIsNot": "Contracted Price",
+            "_note": "A quote created TODAY, after the expiry. MONITOR1080P should come back at its own PricebookEntry.UnitPrice of 250 with no contracted adjustment. Asserted BOTH ways: the list price is the price book's, AND SBQQ__SpecialPriceType__c is not 'Contracted Price'. The second half is what distinguishes 'the expired price correctly did not apply' from 'it applied and happened to equal the list price'.",
+            "_alsoNotTheFilterPrice": "MONITOR1080P is Product Family 'Hardware', not 'Miscellaneous', so CP-00001's 5% filter cannot reach it either. The line should carry NO contracted adjustment of any kind — which is why the assertion uses the same relational hasNoContractedAdjustment() check the out-of-scope test uses."
+          }
+        }
+      }
+    },
+
+    "costPlusMarkup": {
+      "_scenario": "Source scenario 6. One test, one editor session, one line.",
+      "opportunityBaseName": "E2E Cost Plus Markup",
+      "productKey": "firewall",
+
+      "_markupIsCompound": "THE THING TO KNOW BEFORE TOUCHING THIS. The Markup control in the line drawer carries a TYPE selector offering % and USD, and the type decides WHICH quote line field receives the value. MEASURED in this org: unit cost 2100 with a markup of 100 USD gives a special price of 2200; 100 PERCENT would give 4200. So every markup below states its type explicitly and is written through QuoteLineEditorPage.setMarkup(), which refuses to be called without one. setLineDrawerFieldValue() throws by name on the Markup label for the same reason.",
+
+      "_markupFields": "READ FROM THE ORG by describe on 2026-08-02: SBQQ__QuoteLine__c carries SBQQ__MarkupAmount__c (currency, 'Markup (Amt)') AND SBQQ__MarkupRate__c (percent, 'Markup (%)'), plus a SBQQ__Markup__c (currency, 'Markup'). The USD type writes the AMOUNT field and the % type writes the RATE field. Asserting only the resulting Special Price would pass if the value landed in the wrong field and happened to produce the same number, which is why both are asserted — the one that was chosen, and the other being null.",
+
+      "expect": {
+        "_markupTypeChangedFromTheBrief": "The instruction set's section 6.3 recorded a measured run of 100 USD giving a Special Price of 2200. This suite uses 10 % instead, on instruction: '%' is the control's DEFAULT in this org, so the percentage path is the one a rep actually walks, and it exercises the rate field rather than the amount field. The USD arithmetic is not lost — it is recorded in the note above and remains the reason setMarkup() refuses to run without an explicit type.",
+
+        "positive": {
+          "markup": 10,
+          "markupType": "%",
+          "evidence": "cost-plus-markup-positive",
+          "commit": "quickSave",
+          "_source": "10% on a unit cost READ FROM THE ORG as 2100 gives 2310. The list price holds at its price book value of 2400 throughout, which settles the source document's step 6 directly: the cost-plus-markup result lands on SPECIAL price and never touches the list price.",
+          "record": {
+            "SBQQ__ListPrice__c": 2400,
+            "SBQQ__OriginalPrice__c": 2400,
+            "SBQQ__UnitCost__c": 2100,
+            "SBQQ__SpecialPrice__c": 2310,
+            "SBQQ__RegularPrice__c": 2310,
+            "SBQQ__CustomerPrice__c": 2310,
+            "SBQQ__NetPrice__c": 2310,
+            "SBQQ__NetTotal__c": 2310
+          },
+          "_record": "MEASURED on 2026-08-02 against the Developer org, the whole waterfall under a 10% markup: SBQQ__RegularPrice__c and SBQQ__CustomerPrice__c both track the special price at 2310, exactly as they tracked 2200 under the 100 USD run. They were held back from this list until seen rather than assumed — the spec logged them on the run that confirmed them.",
+          "markupField": "SBQQ__MarkupRate__c",
+          "emptyMarkupField": "SBQQ__MarkupAmount__c",
+          "_markupField": "'%' selected, so the RATE field receives 10 and the AMOUNT field must be null. Both halves asserted — a test that checked only the resulting Special Price would pass if the value had landed in the wrong field and happened to produce the same number.",
+          "specialPriceFormula": "percent",
+          "_specialPriceFormula": "The relationship as well as the literal: unitCost * (1 + 10/100) = 2100 * 1.1 = 2310. NOT unitCost + markup — that is the USD formula, and using it here would compute 2110 and fail against a correct org."
+        },
+
+        "negative": {
+          "markup": -10,
+          "markupType": "%",
+          "evidence": "cost-plus-markup-negative",
+          "commit": "quickSave",
+          "_markup": "DERIVED as the mirror of the positive case: -10% against a unit cost of 2100 gives 1890, which is BELOW cost. Entered as a percentage to match the positive case, so the two differ only in sign — which is what makes 'a negative markup is accepted' a claim about the SIGN rather than about the type.",
+          "record": {
+            "SBQQ__SpecialPrice__c": 1890,
+            "SBQQ__RegularPrice__c": 1890,
+            "SBQQ__CustomerPrice__c": 1890,
+            "SBQQ__ListPrice__c": 2400
+          },
+          "_record": "SBQQ__ListPrice__c is asserted UNCHANGED here as well as in the positive case. That is the invariant of the whole scenario: cost-plus-markup writes to Special Price and never touches the list price, whichever direction the markup goes.",
+          "specialPriceFormula": "percent",
+          "persistsBelowCost": true,
+          "_persistsBelowCost": "Asserted relationally against the unit cost read from the org, not against the literal 1890 alone — 'below cost' is the claim, and it survives a change to the cost record."
+        },
+
+        "restore": {
+          "markup": 10,
+          "markupType": "%",
+          "evidence": "cost-plus-markup-restored",
+          "commit": "save",
+          "specialPriceFormula": "percent",
+          "_note": "Restores the positive markup and Saves, so the scenario ends on the state it started from rather than leaving a below-cost line as the last word. Save recalculates and returns to the quote record page."
+        }
+      },
+
+      "_approvalsOutOfScope": "If a negative markup triggers an approval process in this org, RECORD IT AS A FINDING rather than branching for it. Approvals are not in this scenario's scope, and a branch would quietly turn 'CPQ accepted it' into 'CPQ accepted it or asked someone', which is a different claim."
+    },
+
+    "percentOfTotal": {
+      "_scenario": "Source scenarios 3 and 4. Two tests, two quotes — they cannot share one, because test 2 needs a categorized product set that test 1's quote must not carry.",
+      "opportunityBaseName": "E2E Percent Of Total",
+
+      "_assertRelationallyNotLiterally": "THE MOST IMPORTANT NOTE IN THIS OBJECT. The source document's expected prices are literals ($250, $500). They are NOT the primary assertion here. A literal is only meaningful as a percentage of what the contributing lines actually netted, and the moment a contributor's pricing method, price book entry or discount changes, a literal fails while the behaviour is intact — the false alarm tests/pricing/no-rule-fires.spec.js exists to avoid. This org already demonstrates it: FIREWALL is on 'Cost', so any literal reasoned from its 2400 list price is already wrong. The primary assertion is therefore percent x SUM(contributing lines' SBQQ__NetTotal__c), all read from one query over the quote's own lines.",
+
+      "expect": {
+        "literalGate": {
+          "_note": "Literals survive only as a SECONDARY check on the first reading, and only when the guard reports every contributor still on List pricing. When it reports 'Cost' the literal check is SKIPPED and the reason logged — never failed. A skipped check that says why is honest; a failed one would be reporting a catalogue change as a pricing defect."
+        },
+
+        "derivation": {
+          "_test": "Test 1 — the derived price is a percentage of the categorized lines' net, and the base is NET rather than LIST.",
+          "products": ["shippingInsurance", "firewall", "control"],
+          "_products": "Three simple products in ONE selection round. FIREWALL is the only contributor; ROUTER is present to be ignored.",
+          "contributorKey": "firewall",
+          "evidence": "percent-of-total-initial",
+          "_logContributorState": "On the FIRST reading, log the contributor's SBQQ__ListPrice__c, SBQQ__SpecialPrice__c and SBQQ__NetTotal__c, the way no-rule-fires.spec.js logs its account preconditions. A Cost-method product with no markup entered contributes an amount this suite has not measured, and a base nobody can explain is a base nobody will trust when an assertion eventually fails. This log line is what answers that open question on the first run.",
+
+          "discountStep": {
+            "quantity": 2,
+            "additionalDiscount": 25,
+            "evidence": "percent-of-total-after-discount",
+            "commit": "quickSave",
+            "_note": "Applied to the CONTRIBUTOR, not to the derived line. The claim is that a discount changes the NET of a contributing line and therefore the derived price — which is what distinguishes a Net base from a List base. Assert that the summed base moved AND that the derived price tracked it; asserting only that the derived price changed would pass if the quantity edit alone had done it."
+          }
+        },
+
+        "categoryAndCap": {
+          "_test": "Test 2 — only categorized lines contribute, and the price book price caps the result.",
+          "contributors": ["laptop13", "laptop15"],
+          "control": "control",
+          "derived": "shippingInsurance",
+          "_ordering": "The contributors and the control go in FIRST, the percent-of-total product in a SECOND selection round. That is the source document's ordering and it exists so the percentage calculates against lines that are already present.",
+          "_arithmetic": "All DERIVED from list prices READ FROM THE ORG, and every step is checked relationally rather than against these numbers — they are recorded so a reader can see why each quantity was chosen and which side of the cap it lands on. Base at quantity 1 = 1300 + 1500 = 2800, so 10% = 280, comfortably under the 500 cap. The control adds 100/unit and must add NOTHING to the base. LAPTOP13 at 2 gives 2600 + 1500 = 4100 -> 410, still under. LAPTOP15 at 3 gives 2600 + 4500 = 7100 -> 710, over the cap, so the result pins at 500. A further rise keeps it at 500.",
+
+          "steps": [
+            {
+              "step": "baseline",
+              "evidence": "category-baseline",
+              "commit": "quickSave",
+              "_assert": "The derived price equals 10% of the two contributors' summed net. The control is on the quote and contributes nothing."
+            },
+            {
+              "step": "raise the uncategorized control",
+              "product": "control",
+              "quantity": 5,
+              "evidence": "category-control-raised",
+              "_assert": "BOTH halves. The control's own SBQQ__NetTotal__c must have RISEN, and the derived SBQQ__ListPrice__c must be identical to its previous value. Asserting only that the derived value is unchanged would pass if the quantity edit had silently failed — which is exactly how a click that misses a click-to-edit cell presents."
+            },
+            {
+              "step": "raise a categorized product, still under the cap",
+              "product": "laptop13",
+              "quantity": 2,
+              "evidence": "category-contributor-raised",
+              "_assert": "The derived price rises and still equals 10% of the new summed net."
+            },
+            {
+              "step": "raise past the cap",
+              "product": "laptop15",
+              "quantity": 3,
+              "evidence": "category-capped",
+              "commit": "quickSave",
+              "_assert": "The derived price equals Shipping Insurance's PricebookEntry.UnitPrice, read live from the org — NOT the literal 500. This is the cap."
+            },
+            {
+              "step": "raise again, cap holds",
+              "product": "laptop13",
+              "quantity": 3,
+              "evidence": "category-cap-holds",
+              "commit": "save",
+              "_assert": "Still the price book price. One reading at the cap could be a coincidence of arithmetic; two readings across a further increase is the claim that the constraint is binding."
+            }
+          ]
+        }
+      }
+    },
+
+    "blockPricing": {
+      "_scenario": "Source Scenarios 1 and 2, run as ONE Quote Line Editor session. Re-entering the editor costs another cold load and Scenario 2 needs nothing Scenario 1 did not leave behind, so it continues in place.",
+      "_trimmedOn": "2026-08-02, on request, to cut the runtime. The sweep is 20, 21, 50, 54, 51, 50 — six quantities where the first green run walked eleven (4, 20, 21, 30, 10.25, 50, then 51, 52, 53, 50, 52). The trailing 50 was added back immediately after the first trim, which had dropped it: it is the only step that can catch an overage rate leaking downward into the tiered range, and it cost about fifteen seconds. Quantity 1 is still read on top of these, because it comes from the capture quoteSimpleProducts already takes before its own Quick Save and therefore costs no editor interaction at all.",
+      "_whatTheTrimKeeps": "All four claims, each asserted on a RECORD at one of the four commit points: (1) the tier boundary with no gap between the tiers — 20 at 25 against 21 at 35, committed at 21 where SBQQ__NetTotal__c = 35 also proves BLOCK pricing rather than per-unit, since a per-unit reading would total 735; (2) the price holding across tier 2 — 21 and both 50s at 35; (3) the overage rate CHARGING per unit — 54 at 48 and 51 at 45, committed at both, the pair that fixes the rate at (48 - 45) / (54 - 51) = 1; (4) the rate NOT leaking below the tier boundary — the trailing 50 back at 35 on both list and net price, after two quantities in the overage range.",
+      "_whatTheTrimGivesUp": "Two things, named rather than quietly dropped. (1) The FRACTIONAL quantity. 10.25 tested that a quantity between the integers resolves to the tier containing it rather than falling through a gap, which is the one failure a bounds check written against integers alone would miss; nothing in the sweep covers it, and it is the first thing to restore if this suite is given its time back. (2) A third overage point. Two points determine a line, so the rate is fixed, but a third would have distinguished a linear rate from a curve. The interior quantities that also went (4, 30, 52, 53) were redundant with a boundary that survived, and cost no coverage.",
+      "opportunityBaseName": "E2E Block Pricing",
+      "_opportunityBaseName": "The run id is appended by the spec. The Account is shared with other suites, so an unmarked Opportunity name accumulates records nobody can tell apart.",
+
+      "expect": {
+        "pricebookUnitPrice": 0,
+        "_pricebookUnitPrice": "Scenario 1 step 5's claim, asserted as an API fact rather than as a rendering. It is what makes 'the price book price is ignored' a statement about configuration: a block-priced product whose entry read 25 would price at 25 for a reason nobody could distinguish from the tier.",
+
+        "defaultQuantity": {
+          "quantity": 1,
+          "tier": "Small Pickup",
+          "because": "1 is the tier's lower bound, so the first quantity a line is born with already resolves to a tier price rather than to the price book's zero.",
+          "evidence": "default-quantity-1-tier-1-25",
+          "expect": { "listPrice": 25 },
+          "_expect": "DERIVED from tiers[0].price. Read as a DISPLAYED value: nothing has been saved at this point, so there is no record to read (see the spec header's statement of what that gives up)."
+        },
+
+        "tierSweep": [
+          {
+            "quantity": 20,
+            "tier": "Small Pickup",
+            "because": "20 is the LAST quantity tier 1 supports — its upper bound of 21 is exclusive. This is one half of the boundary; the next step is the other.",
+            "evidence": "quantity-20-tier-1-25",
+            "expect": { "listPrice": 25 },
+            "_expect": "DERIVED from tiers[0].price."
+          },
+          {
+            "quantity": 21,
+            "tier": "Large Pickup",
+            "because": "21 is tier 1's exclusive upper bound and tier 2's inclusive lower bound, so it is the exact quantity at which the price steps from 25 to 35. This is the boundary the scenario turns on.",
+            "evidence": "quantity-21-tier-2-35",
+            "commit": "quickSave",
+            "expect": { "listPrice": 35, "netTotal": 35 },
+            "_expect": "DERIVED from tiers[1].price. ASSERTED ON THE RECORD as well as on screen — this is one of the three commit points.",
+            "record": {
+              "SBQQ__ListPrice__c": 35,
+              "SBQQ__NetTotal__c": 35,
+              "SBQQ__Quantity__c": 21
+            },
+            "_record": "SBQQ__NetTotal__c is the assertion that proves BLOCK pricing rather than per-unit pricing: a per-unit reading of the same list price would total 735. Asserting the list price alone would pass under either interpretation."
+          },
+          {
+            "quantity": 50,
+            "tier": "Large Pickup",
+            "because": "50 is the LAST quantity tier 2 supports — its upper bound of 51 is exclusive. The mirror of the step at 20, and with 21 it shows the price holds ACROSS the tier rather than only at its lower edge.",
+            "evidence": "quantity-50-tier-2-35",
+            "expect": { "listPrice": 35, "netTotal": 35 },
+            "_expect": "DERIVED from tiers[1].price, unchanged from quantity 21.",
+            "netTotalIsNotQuantityTimesPrice": true,
+            "_netTotalIsNotQuantityTimesPrice": "This step has no commit, so it carries the explicit 'not 1750' check that quantity 21 gets for free from its record assertion on SBQQ__NetTotal__c. 50 is where a per-unit misreading would be most visible — a block price of 35 multiplied by 50 is off by a factor of fifty."
+          }
+        ],
+
+        "overageSweep": [
+          {
+            "quantity": 54,
+            "tier": "Overage",
+            "because": "Three units above the overage tier's lower bound of 51, so three units of overage are charged at the rate of 1. This is the only quantity in the trimmed sweep that is strictly inside the overage range, which makes it the one step that can prove the rate CHARGES rather than that the tier price is flat.",
+            "evidence": "quantity-54-overage-48",
+            "commit": "quickSave",
+            "expect": { "listPrice": 48, "netPrice": 48 },
+            "_expect": "DERIVED: 45 + (54 - 51) * 1 = 48. ASSERTED ON THE RECORD as well as on screen.",
+            "record": {
+              "SBQQ__ListPrice__c": 48,
+              "SBQQ__NetPrice__c": 48,
+              "SBQQ__Quantity__c": 54
+            },
+            "_record": "Both prices, because the overage tier is the one place list and net could plausibly diverge — an overage charged into the net price but not the list price would still look right on the quote total. Three units rather than one also makes the arithmetic hard to hit by accident: 48 is not reachable from any tier price or any smaller multiple of the rate."
+          },
+          {
+            "quantity": 51,
+            "tier": "Overage",
+            "because": "51 is tier 2's exclusive upper bound and the overage tier's inclusive lower bound. It is zero units ABOVE that bound, so it prices at the flat tier price with no overage accrued — and reaching it by coming DOWN from 54 is what shows the accrual is recomputed from the quantity rather than accumulated across edits.",
+            "evidence": "quantity-51-overage-45-none-accrued",
+            "commit": "quickSave",
+            "expect": { "listPrice": 45, "netPrice": 45 },
+            "_expect": "DERIVED from tiers[2].price with no overage: 45 + (51 - 51) * 1 = 45.",
+            "record": {
+              "SBQQ__ListPrice__c": 45,
+              "SBQQ__NetPrice__c": 45,
+              "SBQQ__Quantity__c": 51
+            },
+            "_record": "The pair with the step above is what fixes the rate: two points determine the line, and (48 - 45) / (54 - 51) = 1 is the configured OverageRate__c. A single overage quantity could not tell a rate of 1 apart from any other constant."
+          },
+          {
+            "quantity": 50,
+            "tier": "Large Pickup",
+            "because": "Back BELOW the overage tier's lower bound, after two quantities inside it. The price must return to tier 2's 35 with no overage residue — the sharpest step in the scenario, because it is the only one that can catch an overage rate leaking downward into the tiered range. Scenario 2's commit: a full Save rather than a Quick Save, because Save recalculates and returns to the quote's record page, which is where the scenario ends.",
+            "evidence": "quantity-50-back-to-tier-2-35",
+            "commit": "save",
+            "expect": { "listPrice": 35, "netPrice": 35 },
+            "_expect": "DERIVED from tiers[1].price. Identical to the earlier step at 50, and that is the point: revisiting the same quantity after being above the tiered range proves the price is resolved FROM the quantity rather than accumulated across edits.",
+            "record": {
+              "SBQQ__ListPrice__c": 35,
+              "SBQQ__NetPrice__c": 35,
+              "SBQQ__Quantity__c": 50
+            },
+            "_record": "Both prices, because an overage residue could plausibly sit in either — a rate that leaked into the net price but not the list price would leave the line looking correct in the List Unit Price column and wrong on the quote total. This step is the reason the evidence slug differs from the earlier 50: two captures under one filename would silently overwrite, and the second is the one that matters.",
+            "_whyItCommits": "The last step of a session has to be the full Save, and this is now the last step. That makes the leak check a RECORD assertion rather than a displayed one, which is the strongest form of it — and it is why 51 above dropped from save to quickSave rather than losing its commit."
+          }
+        ]
+      }
+    }
+  }
+}

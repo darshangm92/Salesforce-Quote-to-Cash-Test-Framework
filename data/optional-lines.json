@@ -1,0 +1,102 @@
+{
+  "_comment": "Scenario data for tests/quote/optional-lines.spec.js (source scenario 9). Filed under @domain:quote rather than @domain:pricing because nothing here changes how a price is DERIVED — it changes which lines a total counts and which lines sync onward. This is the only spec in the pricing-methods set that uses a GROUPED quote, and the grouping is the precondition rather than something the spec creates.",
+  "_provenance": "Everything marked READ FROM THE ORG was queried from the Developer org (coxautomotive-c-dev-ed) on 2026-08-02 over the REST API. Unresolved values ship as the literal [SPECIFY] and fail by name through requireNumber/requireString.",
+
+  "_configAsConfigured": {
+    "_optionalField": "READ FROM THE ORG by describe: SBQQ__Optional__c exists as a boolean on BOTH SBQQ__QuoteLine__c ('Optional') and SBQQ__QuoteLineGroup__c ('Optional'). This resolves the open question about whether Optional exists at group level — it does, on the group object, so the cascade half of the scenario has a real field behind it.",
+    "_optionalIsADrawerField": "CONFIRMED: Optional renders inside the LINE DRAWER, not as a line-table column. That is why the spec reaches it through setLineCheckbox(), which is drawer-scoped, and why nothing here depends on Optional being in this org's Quote Line Editor field set.",
+    "_groupAutomation": "READ FROM THE ORG: quotes on an Account with Industry = 'Retail' get two SBQQ__QuoteLineGroup__c records on insert, created by a record-triggered Flow. Confirmed on twelve groups across six Fernando Estate quotes, and ALREADY RELIED ON by src/flows/createQuoteWithGroups.js, which REST-seeds against this same account and polls for exactly two groups — so the automation demonstrably fires on an API-created quote, not only on a UI-created one. That was the riskiest open question in this spec and it is answered.",
+    "_totalFields": "SBQQ__NetTotal__c is a QUOTE LINE field. The quote's own total is SBQQ__NetAmount__c. Asserting the quote total against SBQQ__NetTotal__c would read a field that is null on the quote and pass or fail for the wrong reason."
+  },
+
+  "timeouts": {
+    "optionalLinesSessionMinutes": 20,
+    "_optionalLinesSessionMinutes": "[VERIFY] Reasoned, not measured for this flow. One grouped Quote Line Editor cold load, two Add Products rounds, several drawer opens, four Quick Saves and one Save, plus an Opportunity round trip. The block-pricing spec measures 2.4 minutes for a comparable single-session flow, and the configurator suite 7.9 for five configurator entries; twenty is a backstop, not a target."
+  },
+
+  "closeDateOffsetDays": 90,
+
+  "accounts": {
+    "grouped": {
+      "name": "The Fernando Estate",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hiAAA, Industry = 'Retail', the ONLY Retail account in this org. A LITERAL rather than a predicate, deliberately: the grouping automation keys off Industry = 'Retail' and this is the single record that satisfies it, so a predicate would add indirection without adding portability.",
+      "needs": "Source scenario 9 — a quote that comes out GROUPED, because the scenario marks a whole group Optional and asserts the flag cascades to every line in it.",
+      "_whyNotThePredicateRule": "Section 1.4 puts Industry != 'Retail' on every predicate in this set precisely to avoid this automation. This spec is the one that wants it, which is why it takes the account by name and does NOT use quoteSimpleProducts — that flow seeds an ungrouped quote and passes allowEmpty to the readiness wait, and both are wrong here.",
+      "_dontUseCreateQuoteWithGroups": "That flow exists for the journey suite and sets SBQQ__LineItemsGrouped__c itself. The groups under test here are the ones the ORG made, so the spec seeds through createSimpleQuote and asserts the two groups appeared — which is what makes a change to that Flow fail by name rather than as a stuck editor."
+    }
+  },
+
+  "groups": {
+    "first": {
+      "name": "One-time Purchases",
+      "number": 1,
+      "_name": "READ FROM THE ORG: the automation names its two groups 'One-time Purchases' (SBQQ__Number__c 1) and 'Ongoing Services' (SBQQ__Number__c 2), consistently across every Fernando Estate quote inspected on 2026-08-02. The name is what QuoteLineEditorPage.groupSection() filters on, so it has to match the org exactly."
+    },
+    "second": {
+      "name": "Ongoing Services",
+      "number": 2,
+      "_name": "READ FROM THE ORG, as above. This is the group the spec marks Optional at group level."
+    }
+  },
+
+  "products": {
+    "_note": "ALL FOUR READ FROM THE ORG on 2026-08-02 and confirmed SIMPLE (SBQQ__ConfigurationType__c null). That matters: a bundle opens the configurator and cannot be added through a plain selection round, and this spec drives the editor directly rather than through quoteSimpleProducts. Name and code are both recorded because the selection screen searches by NAME while every line is ADDRESSED by SBQQ__ProductCode__c.",
+    "_prices": "Recorded for orientation only. Nothing here asserts a literal price — the quote total is compared against the flagged line's OWN SBQQ__NetTotal__c read in the same query, so a catalogue reprice cannot break this spec.",
+
+    "firstGroup": [
+      {
+        "name": "Door Sensor",
+        "productCode": "DOORSENSOR",
+        "pricebookPrice": 40,
+        "_role": "Stays non-optional throughout. Its net total is what the quote total must equal once the other lines are flagged."
+      },
+      {
+        "name": "Exterior Camera",
+        "productCode": "EXTERIORCAMERA",
+        "pricebookPrice": 125,
+        "_role": "The line marked Optional INDIVIDUALLY. Its SBQQ__NetTotal__c read BEFORE the flag is what the quote total must fall by — computed from its own record, never from a literal. Its full pricing detail is also re-read afterwards and compared field by field, which is what 'an optional line preserves its pricing' actually means."
+      }
+    ],
+
+    "secondGroup": [
+      {
+        "name": "Window Sensor",
+        "productCode": "WINDOWSENSOR",
+        "pricebookPrice": 40,
+        "_role": "Cascade target. Every line in this group must carry SBQQ__Optional__c after the group-level flag is set, asserted PER LINE rather than by a count — a count matches for the wrong reason the moment a line is added."
+      },
+      {
+        "name": "Home Security Installation",
+        "productCode": "HOMESECURITYINSTALLATION",
+        "pricebookPrice": 250,
+        "_role": "Cascade target, as above. TWO lines rather than one is what makes 'cascades to every line in the group' a claim rather than a coincidence."
+      }
+    ]
+  },
+
+  "scenarios": {
+    "optionalLines": {
+      "_scenario": "Source scenario 9, one test, one grouped quote.",
+      "opportunityBaseName": "E2E Optional Lines",
+      "_opportunityBaseName": "The run id is appended by the spec. The Account is shared with the journey suite, so an unmarked Opportunity name accumulates records nobody can tell apart.",
+
+      "expect": {
+        "groupCount": 2,
+        "_groupCount": "Asserted BEFORE anything else happens. If the org automation stops firing, this fails naming the account instead of leaving the spec to fail later on a group section that does not exist.",
+
+        "_lineFieldsPreservedAcrossTheFlag": [
+          "SBQQ__ListPrice__c",
+          "SBQQ__NetPrice__c",
+          "SBQQ__NetTotal__c",
+          "SBQQ__Quantity__c"
+        ],
+        "_lineFieldsPreservedNote": "Read from the line BEFORE the flag is set and compared field by field afterwards. That is what 'preserves all pricing detail' actually means — an optional line keeps its full pricing and is merely excluded from the total. Asserting only that the quote total moved would pass even if CPQ had zeroed the line.",
+
+        "_quoteTotalField": "SBQQ__NetAmount__c",
+        "_quoteTotalNote": "The expected value is computed from the flagged line's own SBQQ__NetTotal__c in the same query, never written down here. A literal would be a second source of truth for a number the org already holds.",
+
+        "_opportunitySync": "[VERIFY] Optional lines must not sync to the Opportunity. This requires the quote to be PRIMARY and synced. createSimpleQuote seeds SBQQ__Primary__c = false deliberately, so marking it primary is behaviour under test and is driven in the UI. Assert the Opportunity's products BY PRODUCT, never by count — a count matches for the wrong reason the moment an unrelated line is added."
+      }
+    }
+  }
+}

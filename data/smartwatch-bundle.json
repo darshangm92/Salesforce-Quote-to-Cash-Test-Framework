@@ -1,0 +1,226 @@
+{
+  "_comment": "Scenario data for tests/config/smartwatch-attributes.spec.js — the Smartwatch bundle's configuration attributes. Every value below was READ FROM THE DEVELOPER ORG on 2026-07-31, either by SOQL/describe against the CPQ configuration objects or by driving the live configurator and reading its DOM. Nothing here is a guess.",
+
+  "_scope": "This scenario is about CONFIGURATION ATTRIBUTES — how they render, default, validate and propagate: bundle-level attributes (Size, Accent), a feature-scoped one with a hidden picklist value (Outlet Standard), a text attribute defaulted from the quote's Primary Contact (Engraving), the global attributes in the Product Option Drawer of the two watch bands (Material, Color, Accent), and the propagation of all of those onto Quote Lines and then onto Order Products via twin fields. It is not about pricing, and it stops at Order generation — the Order is never activated or contracted.",
+
+  "_account": "Pre-existing org sample data. Looked up by exact name, NEVER created and never deleted — createSimpleQuote's registerExisting() records it with sweepEligible = false. Industry MUST NOT be 'Retail': in this org that value drives the record-triggered Flow that creates quote line groups, and this spec depends on an UNGROUPED quote. createSimpleQuote throws by name if it ever changes.",
+  "account": {
+    "name": "Milwaukee Distributed Health",
+    "create": false,
+    "sweepEligible": false,
+    "_industry": "READ FROM THE ORG on 2026-07-31: Account 001bm00000hd6hn, Industry = 'Healthcare'. Recorded so a future change shows up as a diff rather than as a mystery failure. Confirmed by seeding a quote against it: zero SBQQ__QuoteLineGroup__c rows were created.",
+    "industry": "Healthcare"
+  },
+
+  "_contact": "The quote's SBQQ__PrimaryContact__c, and the whole reason the Engraving attribute has a default. READ FROM THE ORG on 2026-07-31: exactly one Contact exists under this Account. The spec resolves it by SOQL scoped to the resolved AccountId and asserts against the FirstName/LastName it reads back, never against the literals below — those are provenance, not the expectation.",
+  "contact": {
+    "lastName": "Jackson",
+    "_confirmed": "Contact 003bm00000GMzbu, FirstName = 'Leah', LastName = 'Jackson'.",
+    "firstName": "Leah"
+  },
+
+  "opportunity": {
+    "baseName": "Smartwatch bundle configuration attributes",
+    "_baseName": "The runId is appended at runtime. The Account is shared across runs and specs, so a bare fixed name accumulates records nobody can tell apart afterwards.",
+    "stage": "Prospecting",
+    "closeDateOffsetDays": 90
+  },
+
+  "quote": {
+    "lineItemsGrouped": false,
+    "_lineItemsGrouped": "False is a premise of the scenario, not a convenience. A grouped quote renders a different Quote Line Editor (one section per SBQQ__QuoteLineGroup__c) and every per-line locator here assumes the flat one.",
+    "_primary": "DELIBERATELY NOT SET BY THIS FILE. A record-triggered Flow in this org sets SBQQ__Primary__c = true on quote insert (added by the org owner on 2026-07-31), and the seed value passed by createSimpleQuote is overwritten. MEASURED: a quote created with SBQQ__Primary__c = false reads back true immediately.\n\nThis matters because ordering DEPENDS on it. Before the Flow existed, checking Ordered on a non-primary quote was rejected in the record edit modal with 'Opportunity must have a primary quote in order to create an order.' — the modal simply stayed open and SBQQ__Ordered__c stayed false. The spec therefore ASSERTS the quote is primary before it checks Ordered, so if that Flow is ever changed the failure names the cause instead of surfacing as a modal that will not close."
+  },
+
+  "bundle": {
+    "name": "Smartwatch",
+    "productCode": "SMARTWATCH",
+    "_confirmed": "READ FROM THE ORG on 2026-07-31: Product2 01tbm00000A9pg8, SBQQ__ConfigurationType__c = 'Allowed', SBQQ__ConfigurationEvent__c = 'Always'. That pairing is what makes Add Products hand off to the configurator instead of returning to the selection screen."
+  },
+
+  "_tabs": "THERE IS NO TAB STRIP, and that is a property of the org rather than an omission here. The configurator renders its tab strip from SBQQ__ProductFeature__c.SBQQ__Category__c, and BOTH features on this bundle have Category = null. CONFIRMED in the live DOM on 2026-07-31: zero <paper-tab> elements, one unnamed <sb-product-feature-list> holding both <sb-product-feature> sections. So the spec never calls openTab() — unlike the solar suite, where two categories produce two tabs.",
+  "tabs": [],
+
+  "_features": "SBQQ__ProductFeature__c records, READ FROM THE ORG on 2026-07-31. Document order follows SBQQ__Number__c (10, 20) and is asserted.",
+  "features": {
+    "watchBands": {
+      "name": "Watch Bands",
+      "number": 10,
+      "minOptionCount": 0,
+      "maxOptionCount": null
+    },
+    "chargingOptions": {
+      "name": "Charging Options",
+      "number": 20,
+      "minOptionCount": 0,
+      "maxOptionCount": null
+    }
+  },
+  "featureOrder": ["Watch Bands", "Charging Options"],
+
+  "_watchBands": "THE TWO BANDS ARE THE SAME PRODUCT, which is the single most important fact in this file.\n\nREAD FROM THE ORG on 2026-07-31: the Watch Bands feature holds two SBQQ__ProductOption__c records — PO-000076 (SBQQ__Number__c 10, Required, Quantity 1) and PO-000077 (Number 20, optional, Quantity null) — and BOTH point at Product2 'Smartwatch Band' (01tbm00000A9pg9, SMARTWATCHBAND).\n\nCONFIRMED in the live DOM: they render as two <sb-table-row name=\"Smartwatch Band\"> carrying index=\"0\" and index=\"1\", and their expanded drawers are two <sb-option-drawer name=\"Smartwatch Band\"> with no distinguishing attribute of their own. So NAME IS NOT AN IDENTIFIER HERE. Every lookup goes through the row ordinal, and ProductConfigurationPage reaches each drawer from its own row rather than by name — see DRAWER_ROW_SELECTOR there for the measurement. A name lookup with .first() reads the wrong band and passes, because both drawers carry the same three labels and differ only in their values.\n\nThe spec asserts optionRowCount() is 2 before it addresses either by ordinal, so the ordinals are anchored to a checked fact.",
+  "watchBands": [
+    {
+      "role": "included",
+      "occurrence": 0,
+      "productOption": "PO-000076",
+      "optionName": "Smartwatch Band",
+      "productCode": "SMARTWATCHBAND",
+      "required": true,
+      "selectedByDefault": true,
+      "selectionLocked": true,
+      "_drawerDefaults": "SBQQ__ProductOption__c field values on PO-000076 — this is where the drawer's defaults come from, confirmed by reading both the record and the rendered <select> values.",
+      "drawerDefaults": { "Material": "Silicone", "Color": "Dark Gray", "Accent": "Light Gray" }
+    },
+    {
+      "role": "spare",
+      "occurrence": 1,
+      "productOption": "PO-000077",
+      "optionName": "Smartwatch Band",
+      "productCode": "SMARTWATCHBAND",
+      "required": false,
+      "selectedByDefault": false,
+      "selectionLocked": false,
+      "_drawerReachable": "CONFIRMED on 2026-07-31: the spare band is NOT selected by default (aria-checked=false, aria-disabled=false) and its drawer is still fully reachable and readable — its row renders <div id=\"drawerIcon\"> exactly like the selected band's, and expanding it returns all three attributes with their values. Being unselected does not hide or disable the drawer.",
+      "drawerDefaults": { "Material": "Leather", "Color": "Brown", "Accent": "Gold" }
+    }
+  ],
+
+  "_drawerAttributes": "The three attributes each band's drawer shows, in document order. CONFIRMED in the live DOM on 2026-07-31 for BOTH bands. These are 'global' Configuration Attributes — SBQQ__ConfigurationAttribute__c rows with SBQQ__Product__c = null — which is why they appear in the option drawer rather than above the feature list.",
+  "drawerAttributeLabels": ["Material", "Color", "Accent"],
+  "drawerAttributeFields": { "Material": "Material__c", "Color": "Color__c", "Accent": "Accent__c" },
+
+  "_colorIsDependent": "Color is a DEPENDENT picklist controlled by Material, so the values on offer differ per band and a replacement value has to come from the list that band is currently offering. MEASURED on 2026-07-31 by reading each drawer's <option> list:\n  included band (Material 'Silicone') -> --None--, Light Gray, Dark Gray, Black, White, Brown, Red, Blue, Green, Purple, Pink, Yellow\n  spare band    (Material 'Leather')  -> --None--, Black, White, Brown\nThe spec reads the offered list and asserts its chosen value is in it before selecting, so a dependency change fails with a message that says so rather than an opaque selectOption timeout.",
+
+  "_colorChange": "Step 16 — changed on the INCLUDED band only, so the spare band's Color is the control that proves the write did not leak. 'Blue' is offered for Silicone and is NOT in the spare band's list at all, which makes the cross-contamination check meaningful rather than incidental.",
+  "colorChange": {
+    "band": "included",
+    "label": "Color",
+    "value": "Blue",
+    "otherBandUnchanged": "Brown"
+  },
+
+  "_bundleAttributes": "SBQQ__ConfigurationAttribute__c records on the Smartwatch product, READ FROM THE ORG on 2026-07-31. All target ORG CUSTOM FIELDS with no namespace. 'position' records where the attribute RENDERS, which is the thing scenario 2 exists to distinguish: an attribute with SBQQ__Feature__c set renders inside that feature's section, not in the bundle-level block above the feature list.",
+  "bundleAttributes": {
+    "size": {
+      "label": "Size",
+      "field": "Size__c",
+      "position": "bundle",
+      "required": true,
+      "applyToProductOptions": true,
+      "_applyToProductOptions": "SBQQ__ApplyToProductOptions__c = true, so CPQ stamps the chosen value onto EVERY line in the bundle — parent and all three options. MEASURED: after saving with 44mm, all 4 SBQQ__QuoteLine__c rows carried Size__c = '44mm'.",
+      "default": "40mm",
+      "picklistValues": ["40mm", "44mm"],
+      "committedValue": "44mm"
+    },
+    "accent": {
+      "label": "Accent",
+      "field": "Accent__c",
+      "position": "bundle",
+      "required": true,
+      "applyToProductOptions": false,
+      "_applyToProductOptions": "FALSE, unlike Size — so the chosen value lands on the BUNDLE PARENT ONLY. MEASURED: after saving with 'Dark Gray', the SMARTWATCH line carried Accent__c = 'Dark Gray', the two charger lines carried null, and the SMARTWATCHBAND line carried 'Light Gray' — its OWN drawer value, not the bundle's. That contrast is asserted, because it is what tells Apply-to-Product-Options apart from a value that merely happens to be everywhere.",
+      "default": "Light Gray",
+      "picklistValues": ["Light Gray", "Dark Gray", "Gold"],
+      "committedValue": "Dark Gray"
+    },
+    "engraving": {
+      "label": "Engraving",
+      "field": "Engraving__c",
+      "position": "bundle",
+      "required": false,
+      "type": "text",
+      "_type": "CONFIRMED in the live DOM on 2026-07-31: a text attribute wraps <sb-input> holding <input id=\"myinput\" type=\"text\">, NOT the <select id=\"myselect\"> a picklist attribute wraps. Note that id collides with the floating quantity cell editor, which is why ProductConfigurationPage never addresses it unscoped.",
+      "defaultField": "EngravingDefault__c",
+      "_defaultField": "SBQQ__DefaultField__c = 'EngravingDefault__c' with SBQQ__DefaultObject__c = 'Quote__c', so CPQ seeds the attribute from that field on the QUOTE.",
+      "nameSeparator": "",
+      "_nameSeparator": "READ FROM THE ORG on 2026-07-31 — and it is NOT a space, which is worth stating plainly because the obvious assumption is wrong. SBQQ__Quote__c.EngravingDefault__c is a formula field whose exact definition is:\n\n    SBQQ__PrimaryContact__r.FirstName  + \"\" + SBQQ__PrimaryContact__r.LastName\n\nThat middle literal is an EMPTY string, so first and last name are concatenated with nothing between them. MEASURED end to end: with Primary Contact 'Leah Jackson', the quote's EngravingDefault__c reads \"LeahJackson\", the configurator pre-populates Engraving with \"LeahJackson\", and the saved quote line carries Engraving__c = \"LeahJackson\".\n\nThe spec builds its expectation as FirstName + this separator + LastName, reading both names off the Contact record. So if the formula is ever corrected to use \" \", the fix is this one field and not an assertion buried in the spec.",
+      "override": "Property of Anthropic - do not engrave",
+      "_override": "Step 10's free-text override. Deliberately a string no name-derived default could ever produce, so step 13's 'the override did not become the default' check cannot pass by coincidence. It is typed into a THROWAWAY session that ends in Cancel, so it is never committed to any record."
+    },
+    "outletStandard": {
+      "label": "Outlet Standard",
+      "field": "Outlet_Standard__c",
+      "position": "feature",
+      "feature": "Charging Options",
+      "_position": "SBQQ__Feature__c points at the Charging Options feature, so this attribute renders INSIDE that feature's section rather than in the bundle-level block. CONFIRMED in the live DOM on 2026-07-31 by chained locator: featureSection('Charging Options') contains it (1 match), featureSection('Watch Bands') does not (0), and 'Size' is not inside Charging Options (0).",
+      "required": true,
+      "applyToProductOptions": true,
+      "_applyToProductOptions": "True, and its reach is WIDER than the feature it is scoped to. MEASURED: after saving with TypeC, all 4 lines carried Outlet_Standard__c = 'TypeC' — including the bundle parent and the Smartwatch Band, which is in a different feature entirely. Recorded because the opposite (values confined to the Charging Options lines) is the intuitive guess and is wrong.",
+      "default": "TypeA",
+      "_default": "NOT EMPTY. The field's own picklist default (TypeA) is already selected when the configurator first paints, MEASURED on first entry as value 'TypeA'. See _requiredAttributesCannotBeCleared for what that costs the scenario.",
+      "picklistValues": ["TypeA", "TypeC", "TypeG", "TypeI"],
+      "picklistLabels": [
+        "Type A (North America)",
+        "Type C (Europe)",
+        "Type G (UK/Ireland)",
+        "Type I (Australia/New Zealand)"
+      ],
+      "_picklistLabels": "THE LABEL IS NOT THE VALUE. The <option> text is the long form, the stored value is the short one. setGlobalAttribute() selects by LABEL and globalAttributeValue() returns the VALUE, so both forms are recorded and the spec uses the right one in each place. Passing 'TypeC' to a label-based select fails with an opaque 'did not find some options' timeout.",
+      "excludedValue": "TypeL",
+      "excludedValueLabel": "Type L (Italy)",
+      "_excludedValue": "SBQQ__HiddenValues__c = 'TypeL' on the Configuration Attribute — the exact spelling, with no space, READ FROM THE ORG. The Outlet_Standard__c field itself defines five values (TypeA, TypeC, TypeG, TypeI, TypeL); the configurator offers four. CONFIRMED in the live DOM: no option matching TypeL by value or by label is present. The spec asserts on BOTH spellings so a rename cannot slip through, and asserts absence rather than inferring it from a count.",
+      "committedValue": "TypeC",
+      "committedLabel": "Type C (Europe)"
+    }
+  },
+
+  "_requiredAttributesCannotBeCleared": "A FINDING THAT REMOVES THE SCENARIO'S THREE REJECTION STEPS, and it is a property of the ORG, not of the test.\n\nAll three required attributes on this bundle — Size, Accent and Outlet Standard — arrive ALREADY POPULATED from their picklists' own default values (40mm, Light Gray, TypeA), MEASURED on first entry to a brand-new configuration. And CPQ withholds the '--None--' choice from a required attribute that already carries a value: MEASURED by reading each <select>'s option list on first entry, the offered lists are exactly ['40mm','44mm'], ['Light Gray','Dark Gray','Gold'] and the four Outlet Standard labels. No empty choice, anywhere, ever.\n\nCONSEQUENCE: there is NO POINT IN THE RUN at which any of these three attributes can be emptied through the configurator, so 'clear it and Save, and expect a rejection' is not performable for any of them. It is not that the assertion is inconvenient — the precondition cannot be reached. This bundle has no reachable Save rejection at all: the only other attributes are the drawer ones and Engraving, none of which is required.\n\nThis is the same behaviour data/solar-bundle.json records in _requiredAttributeOrdering, but it bites harder here. There, System Voltage started EMPTY, so the empty-blocks-Save half was reachable once, at the top of the run, and only the clearing half was lost. Here nothing is ever empty and both halves of the rejection are gone.\n\nWHAT THE SPEC ASSERTS INSTEAD, and why it is not a weaker test: for each of the three attributes it proves the value CANNOT BE REMOVED — the picklist offers its real values and no empty choice — which is the invariant the clear-then-Save steps were written to establish. That is a constraint assertion in the configurator-constraint sense: it proves a change cannot be made, so the screen is the only place the outcome exists. Nothing was quietly dropped to make the suite green; the rejection messages simply have no reachable trigger in this bundle, and the spec says so at the step.",
+
+  "_defaults": "The configuration the configurator auto-builds on first open, READ FROM THE LIVE DOM on 2026-07-31. Asserted per option BY NAME AND ORDINAL, including every unselected one, so a default that silently changes cannot be absorbed by a matching total.\n\nselectionLocked is aria-disabled on the row's paper-checkbox: true for an SBQQ__Required__c option, which CPQ auto-selects and refuses to let a user clear. Three of the five options are Required, which is why three of them are selected and locked.",
+  "defaults": [
+    { "feature": "Watch Bands",      "option": "Smartwatch Band",                  "occurrence": 0, "key": "included band", "productCode": "SMARTWATCHBAND",          "selected": true,  "selectionLocked": true,  "required": true },
+    { "feature": "Watch Bands",      "option": "Smartwatch Band",                  "occurrence": 1, "key": "spare band",    "productCode": "SMARTWATCHBAND",          "selected": false, "selectionLocked": false, "required": false },
+    { "feature": "Charging Options", "option": "AC to USB-C Wall Adapter",         "occurrence": 0, "key": "wall adapter",  "productCode": "ACTOUSBCADAPTER",         "selected": true,  "selectionLocked": true,  "required": true },
+    { "feature": "Charging Options", "option": "USB-C Magnetic Smartwatch Charger","occurrence": 0, "key": "magnetic charger", "productCode": "USBCMAGWATCHCHARGER", "selected": true,  "selectionLocked": true,  "required": true },
+    { "feature": "Charging Options", "option": "USB-C Wireless Charging Pad",      "occurrence": 0, "key": "charging pad",  "productCode": "USBCWIRELESSCHARGINGPAD", "selected": false, "selectionLocked": false, "required": false }
+  ],
+
+  "_expectedFinalLines": "The quote's lines after the committing Save, MEASURED end to end on 2026-07-31 by driving the org. Four rows: the bundle parent plus its three auto-selected Required options. The spare band and the wireless charging pad are absent because neither is selected and the spec never selects them.\n\nThe parent is distinguished from its options by SBQQ__RequiredBy__c: null on the parent, populated on every option. MEASURED, not assumed.\n\nEvery attribute value below was read back off the saved records, and the nulls are as load-bearing as the values — Accent__c being null on the two chargers is what proves SBQQ__ApplyToProductOptions__c = false actually confines it.",
+  "expectedFinalLines": [
+    {
+      "productCode": "SMARTWATCH",
+      "name": "Smartwatch",
+      "quantity": 1,
+      "bundleParent": true,
+      "attributes": { "Size__c": "44mm", "Accent__c": "Dark Gray", "Engraving__c": "@engravingDefault", "Outlet_Standard__c": "TypeC", "Material__c": null, "Color__c": null }
+    },
+    {
+      "productCode": "SMARTWATCHBAND",
+      "name": "Smartwatch Band",
+      "quantity": 1,
+      "bundleParent": false,
+      "attributes": { "Size__c": "44mm", "Accent__c": "Light Gray", "Engraving__c": null, "Outlet_Standard__c": "TypeC", "Material__c": "Silicone", "Color__c": "Blue" }
+    },
+    {
+      "productCode": "ACTOUSBCADAPTER",
+      "name": "AC to USB-C Wall Adapter",
+      "quantity": 1,
+      "bundleParent": false,
+      "attributes": { "Size__c": "44mm", "Accent__c": null, "Engraving__c": null, "Outlet_Standard__c": "TypeC", "Material__c": null, "Color__c": null }
+    },
+    {
+      "productCode": "USBCMAGWATCHCHARGER",
+      "name": "USB-C Magnetic Smartwatch Charger",
+      "quantity": 1,
+      "bundleParent": false,
+      "attributes": { "Size__c": "44mm", "Accent__c": null, "Engraving__c": null, "Outlet_Standard__c": "TypeC", "Material__c": null, "Color__c": null }
+    }
+  ],
+
+  "_engravingDefaultToken": "The sentinel '@engravingDefault' above means 'the value derived from the Primary Contact at run time' — FirstName + nameSeparator + LastName. It is a token rather than the literal 'LeahJackson' so the expectation stays tied to the Contact the run actually resolved, per the instruction that Engraving be read from the Contact record rather than hardcoded.",
+
+  "_absentFinalLines": "Asserted explicitly by product code, never inferred from the total. Both of these are options the bundle offers and the run leaves unselected, so their absence is a real outcome rather than a gap. NOTE the spare band shares SMARTWATCHBAND with the included band, so its absence CANNOT be asserted by product code — it is covered by the total line count plus the single SMARTWATCHBAND row, which the spec states at the step.",
+  "absentFinalLines": ["USBCWIRELESSCHARGINGPAD"],
+
+  "_twinFields": "Twin fields carry a quote line's custom values through to the Order Product. RESOLVED BY DESCRIBE on 2026-07-31 against BOTH objects rather than assumed from the labels — every one happens to share its API name across SBQQ__QuoteLine__c and OrderItem, but that was checked, not guessed, because an unknown field name returns zero rows on a read and fails a create outright with INVALID_FIELD.\n\nConfirmed present on SBQQ__QuoteLine__c: Size__c, Accent__c, Engraving__c, Outlet_Standard__c, Material__c, Color__c.\nConfirmed present on OrderItem: the same six names.\n\nMEASURED end to end: after checking Ordered, all four Order Products carried values identical to their quote lines, nulls included.",
+  "twinFields": ["Size__c", "Accent__c", "Engraving__c", "Outlet_Standard__c", "Material__c", "Color__c"],
+
+  "_order": "MEASURED on 2026-07-31: checking Ordered on the primary quote generated exactly ONE Order (status Draft) carrying one Order Product per quote line. The Order is left in Draft — this scenario does not activate it and does not contract it.",
+  "expected": {
+    "orderCount": 1,
+    "orderStatus": "Draft"
+  },
+
+  "_persistence": "The finding that shapes every API assertion here, inherited from the solar suite and re-confirmed for this bundle on 2026-07-31. The configurator's own Save commits to the QUOTE LINE EDITOR, not to the database: immediately after a successful configurator Save the quote had ZERO SBQQ__QuoteLine__c rows, and after the editor's Quick Save it had four. So the spec Quick Saves after the committing Save before reading anything back. Polling instead would poll forever against rows that were never written.\n\nThe corollary is what makes the throwaway session safe: a configurator session ended with Cancel writes nothing at all, which is exactly what the zero-lines assertion after step 11 proves."
+}

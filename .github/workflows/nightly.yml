@@ -1,0 +1,129 @@
+# .github/workflows/nightly.yml
+#
+# Two jobs that deliberately do not depend on each other:
+#
+#   suite — every spec under tests/, run lane-by-lane
+#   sweep — the standalone data sweeper
+#
+# The sweep is NOT chained to the journey job. Data gets left behind exactly
+# when a run crashes, and a cleanup step that only runs after a successful
+# test job is a cleanup step that never runs when it is needed. Both jobs are
+# scheduled independently and neither blocks the other.
+name: CPQ Nightly
+
+on:
+  schedule:
+    # Journeys at 23:00 UTC, sweep at 01:00 UTC — 04:30 and 06:30 IST, which is
+    # what these are actually scheduled around (IST is UTC+5:30 with no DST, so
+    # the mapping is fixed year-round). Note the journey cron fires on the
+    # PREVIOUS UTC day to the IST morning it belongs to; the two still land two
+    # hours apart, which is the part that matters. That gap is not cosmetic —
+    # it is what keeps the sweep from racing a suite run still writing records,
+    # and it absorbs GitHub's habit of firing scheduled workflows late.
+    #
+    # Two hours is a real budget rather than a round number: the full suite is
+    # ~19 minutes locally at --max-concurrent=3, and the job is capped at 120
+    # minutes below. If the suite ever grows past the gap, move the sweep cron
+    # later — do NOT chain it to this job, for the reason stated above.
+    #
+    # These strings are matched LITERALLY by each job's `if:` below, which is
+    # how one workflow file runs two independent schedules. Change a cron here
+    # without changing its `if:` and that job simply never runs again — no
+    # error, no failed run, nothing in the Actions tab to notice.
+    - cron: '0 23 * * *'
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [developer, sandbox, uat]
+        # Developer — the only org with a Connected App configured for the JWT
+        # Bearer flow. See the note in playwright.yml. This one also decides
+        # which org the SWEEPER deletes from, so changing it points a
+        # destructive job at a different org.
+        default: developer
+      run_sweep:
+        description: 'Run the data sweeper (deletes records past retention)'
+        type: boolean
+        default: false
+
+jobs:
+  # The FULL suite — every spec under tests/, not just the journeys. The merge
+  # gate in playwright.yml runs a subset by design (it excludes journeys,
+  # quota-heavy and work-in-progress tests, and it has to finish while someone
+  # waits on a pull request), so this is the only scheduled run that covers
+  # everything. The @domain:orders / contracts / amend / renewal / assets tags
+  # exist ONLY on journey stages and are therefore reachable nowhere else.
+  suite:
+    if: github.event.schedule == '0 23 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run the full suite
+        env:
+          SF_ENV: ${{ github.event.inputs.environment || 'developer' }}
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+          SF_CONSUMER_KEY: ${{ secrets.SF_CONSUMER_KEY }}
+          SF_JWT_PRIVATE_KEY: ${{ secrets.SF_JWT_PRIVATE_KEY }}
+        # test:parallel, NOT `playwright test tests/`. Three reasons, and the
+        # first is a correctness one rather than a speed one:
+        #
+        #   1. The journey stages hand state to each other through
+        #      artifacts/state and must run in order, in one worker. Playwright's
+        #      serial mode only orders tests WITHIN a file, so a plain run with
+        #      more than one worker starts subscription-renewal before
+        #      subscription-lifecycle has written the state file it reads. The
+        #      journeys lane pins --workers=1 internally, which is what
+        #      test:journey used to do here.
+        #   2. A coverage guard aborts the run naming any spec no lane claims,
+        #      so a spec added later cannot silently go unrun in the nightly.
+        #   3. It finishes in the slowest lane's time rather than the sum —
+        #      measured 19.1 minutes against a lane-duration sum of 51.9.
+        #
+        # Concurrency defaults to 3 lanes at a time. If the runner or the org
+        # struggles, pass --max-concurrent=2 rather than dropping back to a
+        # serial run, which would cost ~30 minutes and fix nothing else.
+        run: npm run test:parallel
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: report-suite
+          # playwright-report/ and test-results/ hold one subdirectory PER LANE
+          # (the reporter and artifact paths are split so concurrent lanes do
+          # not overwrite each other), so these paths capture every lane.
+          # allure-results/ is deliberately shared and needs no split.
+          path: |
+            playwright-report/
+            test-results/
+            allure-results/
+            artifacts/
+            data/e2e-run-ledger.xlsx
+          retention-days: 30
+
+  sweep:
+    if: github.event.schedule == '0 1 * * *' || (github.event_name == 'workflow_dispatch' && inputs.run_sweep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Sweep E2E data past retention
+        env:
+          SF_ENV: ${{ github.event.inputs.environment || 'developer' }}
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+          SF_CONSUMER_KEY: ${{ secrets.SF_CONSUMER_KEY }}
+          SF_JWT_PRIVATE_KEY: ${{ secrets.SF_JWT_PRIVATE_KEY }}
+        # --confirm is required for the sweeper to delete anything; without it
+        # the script prints its plan and exits.
+        run: npm run cleanup:e2e -- --confirm

@@ -1,0 +1,98 @@
+# .github/workflows/playwright.yml
+#
+# The merge gate. Fast, Chromium-only, and never runs journeys — a journey
+# walks a subscription from quote to renewal and takes far too long to sit in
+# front of a pull request. Journeys run nightly (nightly.yml).
+name: CPQ E2E Tests
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [developer, sandbox, uat]
+        # Developer, matching the automatic runs below. The JWT Bearer flow
+        # needs a Connected App with THIS repo's server.crt uploaded and the
+        # running user pre-authorized, and only the Developer org has one — a
+        # sandbox default sends Developer credentials to test.salesforce.com
+        # and fails with invalid_grant. Pick another org here only once its
+        # Connected App is set up (Section 1).
+        default: developer
+
+jobs:
+  # Tag hygiene gates everything else: a typo'd tag makes a --grep slice match
+  # zero tests and pass green, so catching it here is worth the extra minute.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint:tags
+
+  cpq:
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Slices over the tag taxonomy rather than over folders, so a test moves
+      # between slices by changing its tags, not by being moved on disk.
+      #
+      # EVERY SLICE HERE MUST MATCH AT LEAST ONE TEST, and every test the gate
+      # would run must be claimed by one of them. `npm run lint:tags` checks
+      # both directions and the lint job above gates this one, so a slice that
+      # selects nothing fails in the cheap job rather than as five minutes of
+      # "No tests found" against the org.
+      #
+      # MEASURED 2026-08-03: three of the five slices that used to be here
+      # matched ZERO tests and had been failing on every pull request.
+      # `order-contract` (@domain:orders|@domain:contracts) and
+      # `amend-renewal-assets` (@domain:amend|@domain:renewal|@domain:assets)
+      # were removed rather than repaired: those five domains exist ONLY on
+      # journey stages, and the shared --grep-invert below excludes journeys
+      # from every PR slice by design, so the two slices were unsatisfiable
+      # here no matter how they were written. Those domains are covered by
+      # `npm run test:journey` in nightly.yml, which is where a journey-length
+      # flow belongs. Give them a slice again if a NON-journey test ever
+      # carries one of those domains — the lint's second direction will fail
+      # and name the test if you forget.
+      matrix:
+        include:
+          - slice: smoke
+            select: '--grep "@type:smoke"'
+          - slice: quote-config
+            select: '--grep "@domain:quote|@domain:config"'
+          - slice: pricing-approvals
+            select: '--grep "@domain:pricing|@domain:approvals"'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run ${{ matrix.slice }} slice
+        env:
+          SF_ENV: ${{ github.event.inputs.environment || 'developer' }}
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+          SF_CONSUMER_KEY: ${{ secrets.SF_CONSUMER_KEY }}
+          SF_JWT_PRIVATE_KEY: ${{ secrets.SF_JWT_PRIVATE_KEY }}
+        # Journeys, quota-heavy and work-in-progress tests are excluded from
+        # every PR slice. @skip-de is filtered here rather than with an
+        # in-test test.skip() so the runner never even loads them.
+        run: npx playwright test ${{ matrix.select }} --grep-invert "@type:journey|@quota:heavy|@wip|@skip-de"
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: report-${{ matrix.slice }}
+          path: |
+            playwright-report/
+            allure-results/
+            artifacts/ledger/
+          retention-days: 14

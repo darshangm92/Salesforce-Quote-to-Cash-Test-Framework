@@ -1,0 +1,34 @@
+# .gitignore
+node_modules/
+.env
+.auth/
+.certs/
+playwright-report/
+allure-report/
+allure-results/
+test-results/
+# Per-worker ledger shards and journey state hand-off files. Transient — the
+# shards are folded into data/e2e-run-ledger.xlsx by scripts/merge-ledger.js
+# at the end of each run.
+artifacts/
+# Run evidence — one PNG per documented validation point, regenerated on every
+# run by src/utils/evidence.js. Already covered by artifacts/ above; named
+# explicitly because these are a deliverable someone will go looking for, and
+# an ignore rule they can see is one they will not fight.
+artifacts/evidence/
+
+# The merged run ledger. Local-only: it is a binary workbook that changes on
+# every run, so tracking it means a conflict on every merge. The sweeper still
+# works without history here — it reads the current workbook plus any unmerged
+# shards, and falls back to the SOQL marker net for anything older.
+data/e2e-run-ledger.xlsx
+
+# Excel's lock/owner files, created beside a workbook while it is open. They
+# are transient, machine-specific and meaningless to anyone else.
+~$*
+
+# Claude Code's instruction set — kept local.
+CLAUDE.md
+
+# Working notes and reviews — kept local.
+docs/

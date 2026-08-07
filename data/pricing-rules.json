@@ -1,0 +1,287 @@
+{
+  "_comment": "Scenario data for tests/pricing/ — the Salesforce CPQ price rule badge scenarios. Inputs and their expected RECORD-FIELD outcomes live in the same object so an assertion can never drift away from the data that produced it. Expected values are SBQQ__QuoteLine__c field values, never formatted strings.",
+
+  "_provenance": "EVERY value below was READ FROM THE DEVELOPER ORG on 2026-08-01 by SOQL against Product2, PricebookEntry, Account, IndustryPrice__c and the SBQQ price-rule configuration objects. Nothing here is a guess. The rule definitions are recorded alongside the expectations they produce, because a price like 400 is meaningless on its own — what makes it assertable is knowing which action wrote it.",
+
+  "_rulesAsConfigured": {
+    "_note": "READ-ONLY orientation. This suite never creates, edits or asserts on price-rule configuration; it asserts on the PRICES that configuration produces, so an inactive rule surfaces as a failed price assertion. All eight rules are Active with Evaluation Event = 'On Calculate'.",
+    "Educational Netbook List Price": "Quote.AccountIndustry__c = 'Education' AND QuoteLine ProductCode = 'NETBOOK'  ->  SBQQ__ListPrice__c = 400",
+    "Referral List Price": "Quote.ReferralCode__c = 'tradeshow' AND QuoteLine ProductCode = 'SMARTBLINDS'  ->  SBQQ__ListPrice__c = 125",
+    "New Customer SD Card List Price": "Quote formula SBQQ__Opportunity2__r.Type = 'New Customer' AND QuoteLine ProductCode starts with 'SDCARD'  ->  SBQQ__ListPrice__c = SBQQ__OriginalPrice__c - 25",
+    "Small Business SSD Special Price": "Quote formula SBQQ__Account__r.NumberOfEmployees < 50 AND QuoteLine ProductCode starts with 'SSD'  ->  SBQQ__SpecialPrice__c = SBQQ__ListPrice__c * 0.8, SBQQ__SpecialPriceType__c = 'Custom'",
+    "Repeated Laptop List Price": "Summary Variable 'Laptop Asset Sum' >= 10 AND QuoteLine ProductCode starts with 'LAPTOP1'  ->  SBQQ__ListPrice__c = SBQQ__OriginalPrice__c - 100",
+    "Lookup Netbook Price": "Lookup IndustryPrice__c matching IPIndustry__c = Quote.AccountIndustry__c, IPProduct__c = QuoteLine.SBQQ__Product__c, IPSLA__c = Quote.AccountSLA__c  ->  SBQQ__ListPrice__c = IPPrice__c",
+    "Web Lead List Price": "NOT EXERCISED — no scenario in scope covers it (ProductCode contains 'WEBCAM').",
+    "Marketing Platform List Price": "NOT EXERCISED — Suite Subscription Sum >= 5, out of scope."
+  },
+
+  "_summaryVariable": "'Laptop Asset Sum' = SUM(Quantity) over ASSET records whose Product Code starts with 'LAPTOP1', scoped to the quote's Account. NOT a quote-line aggregate — this is the account's INSTALLED BASE, which is why Scenario 5 is keyed to a specific account and why the negative control must exclude accounts holding laptop assets. GenePoint has LAPTOP13 x8 + LAPTOP15 x2 = 10, which meets the >= 10 threshold exactly.",
+
+  "_accounts": "Two resolution rules. Where a scenario NAMES an account the rule under test is keyed to that record and the name is a literal. Where it only DESCRIBES one, a SOQL predicate resolves it and src/utils/pricingData.js logs whichever record it chose — it never falls back. Accounts are looked up, never created and never deleted. None may have Industry = 'Retail': in this org that drives the record-triggered Flow that creates quote line groups, and every locator in this suite assumes the flat line table.",
+  "accounts": {
+    "kevco": {
+      "name": "Kevco Inc.",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hlAAA. The trailing 'Inc.' matters — 'Kevco' alone finds nothing and createSimpleQuote throws by name.",
+      "needs": "Scenario 1 — Industry = 'Education', which is what Educational Netbook List Price is conditioned on.",
+      "industry": "Education",
+      "sla": null,
+      "_noCollision": "The Lookup Netbook Price rule targets the SAME field for the SAME product and Education DOES have IndustryPrice__c rows (490/475/430/400 for Bronze/Silver/Gold/Platinum). It cannot collide here: its third lookup query matches IPSLA__c against Quote.AccountSLA__c, and Kevco's Account.SLA__c is EMPTY, so no row matches and the lookup contributes nothing. The expected 400 therefore comes unambiguously from the Education rule. If someone sets Kevco's SLA to Platinum the two rules would both write 400 and the test would still pass while proving less; if they set it to Gold the price becomes 430 and this test fails, which is the correct signal."
+    },
+    "genepoint": {
+      "name": "GenePoint",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hgAAA, Industry = 'Biotechnology', SLA = 'Bronze', NumberOfEmployees = 265.",
+      "needs": "Scenario 5 — an account whose laptop ASSET quantity reaches the summary variable's threshold of 10.",
+      "_assets": "READ FROM THE ORG: LAPTOP13 x8 and LAPTOP15 x2 = 10 exactly. Deleting or reducing either asset drops the sum below 10 and Scenario 5 stops firing.",
+      "_noOtherRules": "Biotechnology has no IndustryPrice__c row, so the lookup cannot fire; 265 employees is over the SSD rule's threshold of 50."
+    },
+    "milwaukeeHealth": {
+      "name": "Milwaukee Distributed Health",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hnAAA, Industry = 'Healthcare', SLA = 'Gold'.",
+      "needs": "Scenario 6 — the Healthcare + Gold pair, which resolves IndustryPrice__c rows IP-0011 (NETBOOK, 435) and IP-0015 (NETBOOKPRO, 535)."
+    },
+    "smallEmployer": {
+      "name": "PicoMachines",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hmAAA, Industry = 'Technology', NumberOfEmployees = 30. Pinned rather than left to the predicate because the predicate also matches two accounts both literally named 'Test Account 3', and which of those wins is decided by Id ordering.",
+      "predicate": "NumberOfEmployees < 50 AND NumberOfEmployees != null AND Industry != 'Retail'",
+      "needs": "Scenario 4 positive — NumberOfEmployees < 50, the condition Small Business SSD Special Price tests through SBQQ__Account__r.NumberOfEmployees."
+    },
+    "anyNonRetail": {
+      "name": "Burlington Textiles Corp of America",
+      "_name": "READ FROM THE ORG: 001bm00000hd6hXAAQ, Industry = 'Banking', SLA = 'Silver', NumberOfEmployees = 9000. Pinned so the referral and formula scenarios always run against a known record.",
+      "predicate": "Industry != 'Retail' AND Industry != null",
+      "needs": "Scenarios 3, 14, 15 and 16 — no account-level condition applies; these rules key off Opportunity.Type or the quote's ReferralCode__c. The only requirement is that the quote comes out UNGROUPED.",
+      "_whyThisOneIsSafe": "Banking has no IndustryPrice__c row (only Education and Healthcare do), 9000 employees is over the SSD threshold, and it holds no laptop assets — so no rule other than the one under test can fire on these quotes."
+    },
+    "negativeControl": {
+      "name": "Burlington Textiles Corp of America",
+      "_name": "Deliberately the same account as anyNonRetail, and that is safe: every assertion in this suite is scoped by SBQQ__Quote__c, never by AccountId, so two specs quoting the same account cannot affect each other. The difference between the two entries is what the QUOTE carries, not who it is for.",
+      "predicate": "Industry != 'Retail' AND Industry != 'Education' AND Industry != null AND NumberOfEmployees >= 50 AND Id NOT IN (SELECT AccountId FROM Asset WHERE Product2.ProductCode LIKE 'LAPTOP%')",
+      "needs": "Scenarios 2, 5, 7 and 15 negatives, and Scenario 4 step 12 — ONE account that trips none of the rules.",
+      "_verifiedAgainstEveryRule": "Industry Banking -> no IndustryPrice__c row, so Lookup Netbook Price finds nothing (Scenario 7's zero-row case) and Educational Netbook List Price cannot match. NumberOfEmployees 9000 -> Small Business SSD Special Price cannot match. No LAPTOP1* assets -> Laptop Asset Sum is 0, so Repeated Laptop List Price cannot match. The quote carries no ReferralCode__c and its Opportunity has no Type, so neither the referral nor the SD card rule can match.",
+      "_fourthCondition": "The predicate expresses three of the four requirements. 'Industry absent from IndustryPrice__c' is NOT expressible in SOQL — a semi-join compares Ids, not picklist values — so it is left to fail loudly rather than be half-enforced: an account whose Industry did have a row would fire the lookup and fail the netbook assertion by name. Burlington's Banking satisfies it, which is why the name is pinned."
+    }
+  },
+
+  "_products": "Product codes and names READ FROM THE ORG on 2026-08-01. Both are needed and for different reasons: the selection screen SEARCHES by name, and every quote line is ADDRESSED by SBQQ__ProductCode__c because names are not unique. `pricebookPrice` is the standard price book's UnitPrice, i.e. the price BEFORE any rule fires. `bundle` is SBQQ__ConfigurationType__c being set — a bundle opens the configurator instead of returning to the selection screen, and must be routed through selectBundle() rather than addProducts().",
+  "products": {
+    "netbook": {
+      "name": "Netbook",
+      "productCode": "NETBOOK",
+      "pricebookPrice": 500,
+      "bundle": false
+    },
+    "netbookPro": {
+      "name": "NetbookPro",
+      "productCode": "NETBOOKPRO",
+      "pricebookPrice": 600,
+      "bundle": false
+    },
+    "control": {
+      "name": "Router",
+      "productCode": "ROUTER",
+      "pricebookPrice": 100,
+      "bundle": false,
+      "_role": "The in-quote negative control for Scenario 2 step 2 and Scenario 15 step 2 — added alongside the product under test so one quote proves both that the rule fired where it should AND that it left every other line alone.",
+      "_whyRouter": "Checked against every active rule: ROUTER is not NETBOOK, not SMARTBLINDS, does not start with SDCARD, SSD or LAPTOP1, does not contain WEBCAM, and has no IndustryPrice__c row. Nothing in the org can move its price, which is exactly what a control needs."
+    },
+    "smartblinds": {
+      "name": "Smart Blinds",
+      "_name": "READ FROM THE ORG: the Name is TWO WORDS, 'Smart Blinds', while the product code is one. The selection screen searches by name, so 'Smartblinds' finds nothing.",
+      "productCode": "SMARTBLINDS",
+      "pricebookPrice": 150,
+      "bundle": false
+    },
+    "router": {
+      "name": "Router",
+      "productCode": "ROUTER",
+      "pricebookPrice": 100,
+      "bundle": false,
+      "_role": "Scenario 3's built-in negative: it rides on the same quote as SDCARD256GB and shares its Opportunity Type = 'New Customer' condition, so it isolates the PRODUCT CODE half of that rule's condition."
+    },
+    "sdCard": {
+      "name": "SD Card 256GB",
+      "productCode": "SDCARD256GB",
+      "pricebookPrice": 85,
+      "bundle": false
+    },
+    "laptop15": {
+      "name": "15\" Laptop",
+      "_name": "READ FROM THE ORG. The name contains a DOUBLE QUOTE, which is why it is escaped here and why matching by product code afterwards matters.",
+      "productCode": "LAPTOP15",
+      "pricebookPrice": 1500,
+      "bundle": true,
+      "_bundle": "SBQQ__ConfigurationType__c = 'Allowed', SBQQ__ConfigurationEvent__c = 'Always'. That pairing is what makes Add Products hand off to the configurator.",
+      "option": {
+        "feature": "Storage",
+        "tab": null,
+        "_tab": "The bundle's features carry no SBQQ__Category__c, so the configurator renders no tab strip and nothing needs opening.",
+        "name": "SSD Hard Drive 512GB",
+        "productCode": "SSD512",
+        "_feature": "READ FROM THE ORG: Storage has SBQQ__MinOptionCount__c = 1 and SBQQ__MaxOptionCount__c = 1, so it renders RADIO buttons and selecting SSD512 auto-deselects the default SSD256. That is why the finished quote holds exactly one SSD line.",
+        "_price": "The SBQQ__ProductOption__c record sets SBQQ__UnitPrice__c = 100, which is what makes the option's SBQQ__ListPrice__c 100 while its SBQQ__OriginalPrice__c stays at the price book's 150. Adding SSD512 as a standalone product instead would price it at 150 and the special price would be 120, so the bundle route is required by the scenario, not preferred."
+      }
+    },
+    "laptop13": {
+      "name": "13\" Laptop",
+      "productCode": "LAPTOP13",
+      "pricebookPrice": 1300,
+      "bundle": true,
+      "_bundle": "READ FROM THE ORG and CONTRARY TO THE ORIGINAL ASSUMPTION: LAPTOP13 is configurable exactly like LAPTOP15 (SBQQ__ConfigurationType__c = 'Allowed', SBQQ__ConfigurationEvent__c = 'Always'). It must go through selectBundle() and the configurator; addProducts() would fail with an error blaming the selection screen. Its three features — Processor, Memory, Storage — are each min 1 / max 1 and arrive with a default selected, so the configurator's Save is accepted without touching anything.",
+      "_options": "CPU16GHZI5, SSD128, RAM8GB, RAM16GB. None is asserted on; the scenario is about the PARENT line's price."
+    },
+    "laptopCart": {
+      "name": "Laptop Charging Cart",
+      "productCode": "LAPTOPCART",
+      "pricebookPrice": 1100,
+      "bundle": false,
+      "_role": "Scenario 5's product-scope negative (step 13). It rides on the GenePoint quote alongside LAPTOP13, so it isolates the PRODUCT half of the summary-variable rule's condition from the ACCOUNT half.",
+      "_whyItIsAValidNegative": "The rule matches ProductCode STARTS WITH 'LAPTOP1'. 'LAPTOPCART' does not, so it is left alone on a quote where the summary variable's threshold is met — which is the sharpest possible form of the negative."
+    }
+  },
+
+
+  "scenarios": {
+    "_staticListPrice": "Scenario 1 (Educational Netbook List Price), Scenario 2 step 2, and Scenarios 14/15 (Referral List Price). One spec, four quotes: the referral code is seeded over the API rather than typed onto the quote record, which removes six record-edit-and-re-enter round trips. The UI edit survives only in Scenario 16, where it IS the behaviour under test.",
+    "staticListPrice": {
+      "educationNetbook": {
+        "_scenario": "Scenario 1 + Scenario 2 step 2",
+        "account": "kevco",
+        "opportunityBaseName": "CPQ pricing — Education netbook list price",
+        "products": ["netbook", "control"],
+        "expect": {
+          "netbook": { "SBQQ__ListPrice__c": 400 },
+          "control": { "listPriceEqualsOriginal": true }
+        }
+      },
+      "referralTradeshow": {
+        "_scenario": "Scenario 14 + Scenario 15 step 2",
+        "account": "anyNonRetail",
+        "opportunityBaseName": "CPQ pricing — referral code tradeshow",
+        "quoteFields": { "ReferralCode__c": "tradeshow" },
+        "products": ["smartblinds", "control"],
+        "expect": {
+          "smartblinds": {
+            "SBQQ__ListPrice__c": 125,
+            "SBQQ__OriginalPrice__c": 150
+          },
+          "control": { "listPriceEqualsOriginal": true }
+        }
+      },
+      "referralCapitalised": {
+        "_scenario": "Scenario 15 step 7 — case sensitivity",
+        "account": "anyNonRetail",
+        "opportunityBaseName": "CPQ pricing — referral code Tradeshow (capitalised)",
+        "quoteFields": { "ReferralCode__c": "Tradeshow" },
+        "products": ["smartblinds"],
+        "expect": {
+          "smartblinds": {
+            "SBQQ__ListPrice__c": 125,
+            "_SBQQ__ListPrice__c": "MEASURED against the Developer org on 2026-08-01, twice, with identical results: ReferralCode__c = 'Tradeshow' produced SBQQ__ListPrice__c = 125 against a price book price of 150. So CPQ's price-condition text comparison is CASE-INSENSITIVE — the rule's condition is spelled 'tradeshow' and a capitalised value still matches. Recorded from the run rather than predicted; the source scenario leaves it open."
+          }
+        }
+      }
+    },
+
+    "formulaListPrice": {
+      "_scenario": "Scenario 3 — a formula price action, conditioned on Opportunity.Type AND the product code.",
+      "account": "anyNonRetail",
+      "opportunityBaseName": "CPQ pricing — formula list price on new customer",
+      "opportunityFields": { "Type": "New Customer" },
+      "products": ["sdCard", "router"],
+      "expect": {
+        "sdCard": {
+          "SBQQ__OriginalPrice__c": 85,
+          "SBQQ__ListPrice__c": 60,
+          "listPriceEqualsOriginalMinus": 25
+        },
+        "router": { "listPriceEqualsOriginal": true }
+      }
+    },
+
+    "specialPrice": {
+      "_scenario": "Scenario 4 — a Special Price action on a bundle option, conditioned on the account's employee count.",
+      "positive": {
+        "account": "smallEmployer",
+        "opportunityBaseName": "CPQ pricing — SSD special price, small employer",
+        "bundle": "laptop15",
+        "expect": {
+          "SSD512": {
+            "SBQQ__OriginalPrice__c": 150,
+            "SBQQ__ListPrice__c": 100,
+            "SBQQ__SpecialPrice__c": 80,
+            "SBQQ__SpecialPriceType__c": "Custom",
+            "specialPriceEqualsListPriceTimes": 0.8
+          }
+        }
+      },
+      "negative": {
+        "_scenario": "Scenario 4 step 12 — the same flow against an account with 50 or more employees.",
+        "account": "negativeControl",
+        "opportunityBaseName": "CPQ pricing — SSD special price, large employer (negative)",
+        "bundle": "laptop15",
+        "expect": {
+          "SSD512": { "specialPriceTypeIsNot": "Custom" }
+        }
+      }
+    },
+
+    "summaryVariable": {
+      "_scenario": "Scenario 5 — a rule whose condition is a SUMMARY VARIABLE over the account's laptop ASSETS, not over the quote.",
+      "account": "genepoint",
+      "opportunityBaseName": "CPQ pricing — laptop summary variable",
+      "bundles": ["laptop13"],
+      "products": ["laptopCart"],
+      "_shape": "LAPTOP13 is a bundle and therefore takes its own Add Products round through the configurator; the cart is a simple product and follows in a second round. They still share ONE quote, which is what makes the cart a negative for the product half of the rule's condition.",
+      "_RESOLVED_2026-08-01": "This scenario failed for most of the day and the cause was a one-field misconfiguration on the summary variable, not anything in this suite. FIXED and now passing.",
+      "_ROOT_CAUSE": "Summary Variable 'Laptop Asset Sum' (a11bm000003vNivAAE) had SBQQ__FilterField__c = 'Product Code', which names a field that DOES NOT EXIST on its target object. The SBQQ__FilterField__c picklist mixes LABELS with API NAMES — its four values are 'Product Code', 'Product Family', 'ProductCode' and 'SBQQ__ProductName__c'. 'Product Code' is the LABEL of SBQQ__ProductCode__c, which exists on Quote Line and Product Option but NOT on Asset; Asset's product code field is the standard 'ProductCode' (no space), the separate entry. The filter therefore matched no Asset records, the sum was 0, the 'greater or equals 10' condition was never met, and the rule never fired. Setting Filter Field = 'ProductCode' fixed it: LAPTOP13 now prices at 1200.",
+      "_HOW_IT_WAS_FOUND": "Field describes, read 2026-08-01: Asset has ProductCode (label 'Product Code') and no SBQQ__ProductCode__c at all; SBQQ__QuoteLine__c and SBQQ__ProductOption__c both have SBQQ__ProductCode__c (label 'Product Code'); SBQQ__Subscription__c has neither and carries SBQQ__ProductName__c. That maps every summary variable in the org exactly, including why 'Suite Subscription Sum' had to use the API-name entry — which is the reason the picklist carries both styles.",
+      "_SCOPE_WAS_NOT_THE_CAUSE": "SBQQ__Scope__c was also changed on this record from 'Quote' to 'Assets' during the investigation, and that change ALONE did not make the rule fire — measured, the price stayed at 1300. It was an incorrect first diagnosis. Whether 'Assets' is additionally required for an Asset-target variable is still unproven; it is left in place because it looks right, but nothing here demonstrates it matters.",
+      "_WHY_THIS_IS_EASY_TO_GET_WRONG": "SBQQ__FilterField__c and SBQQ__AggregateField__c are NOT dependent picklists on SBQQ__TargetObject__c (controllerName is null on both), so the UI offers all four filter fields whatever the target object is — including one that reads like the obvious choice and silently matches nothing. The Aggregate Field help text even reads 'Quote Line field that's acted upon by the aggregate function', which nudges toward a quote-centric reading.",
+      "expect": {
+        "laptop13": {
+          "SBQQ__ListPrice__c": 1200,
+          "listPriceEqualsOriginalMinus": 100
+        },
+        "laptopCart": { "listPriceEqualsOriginal": true }
+      }
+    },
+
+    "lookupPrice": {
+      "_scenario": "Scenario 6 — a Lookup Query resolving one row of IndustryPrice__c per product. TWO products against ONE account is the point: a single product cannot distinguish a lookup that resolves per-product from a rule that writes a constant.",
+      "_outOfScope": "The full 16-row Industry x Product x SLA matrix is deliberately not built, and neither is Scenario 7's multiple-matching-rows case, which would need a duplicate IndustryPrice__c record and therefore a serial suite.",
+      "account": "milwaukeeHealth",
+      "opportunityBaseName": "CPQ pricing — industry lookup price",
+      "products": ["netbook", "netbookPro"],
+      "expect": {
+        "netbook": { "SBQQ__ListPrice__c": 435 },
+        "netbookPro": { "SBQQ__ListPrice__c": 535 },
+        "pricesMustDiffer": true,
+        "_rows": "IP-0011 (Healthcare/NETBOOK/Gold) = 435 and IP-0015 (Healthcare/NETBOOKPRO/Gold) = 535, READ FROM THE ORG."
+      }
+    },
+
+    "negativeControl": {
+      "_scenario": "One quote covering Scenario 2 steps 4-5, Scenario 3 step 10, Scenario 5 step 12, Scenario 7's zero-row case and Scenario 15 steps 4-5. No referral code, no Opportunity Type, and an account that trips none of the account-level conditions — so NO rule may fire on ANY line.",
+      "account": "negativeControl",
+      "opportunityBaseName": "CPQ pricing — negative control, no rule may fire",
+      "bundles": ["laptop13"],
+      "products": ["netbook", "sdCard", "smartblinds"],
+      "_shape": "LAPTOP13 is a bundle and takes its own round; the other three are simple and share a second round. All four land on one quote.",
+      "expect": {
+        "everyLine": {
+          "listPriceEqualsOriginal": true,
+          "specialPriceTypeIsNot": "Custom"
+        }
+      }
+    }
+  },
+
+  "_timeouts": "MEASURED on 2026-08-01 — see the per-spec notes. A single cold Quote Line Editor load alone exceeds the project default of 120s, and a bundle adds a configurator entry on top.",
+  "timeouts": {
+    "singleSessionMinutes": 8,
+    "configuratorSessionMinutes": 12
+  },
+
+  "closeDateOffsetDays": 90,
+  "_closeDateOffsetDays": "Days from today, so the seeded Opportunity never carries a close date in the past."
+}
