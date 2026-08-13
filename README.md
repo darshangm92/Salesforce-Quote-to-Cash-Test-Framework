@@ -196,6 +196,8 @@ npm run allure:serve    # generate + open Allure in one step
 
 Beyond the pass/fail report, every spec also captures a screenshot at each documented validation point (`src/utils/evidence.js`) into gitignored `artifacts/evidence/<spec-file>/<ordinal>-<slug>.png`, attached automatically to the HTML and Allure reports. These are evidence, not visual-regression baselines — nothing ever diffs them — but they're useful when a run needs to be reviewed by someone who isn't going to open the org.
 
+The nightly full-suite run also publishes its Allure report to GitHub Pages — see Section 13.3 for the URL, what the published report contains, and how to build the same thing locally.
+
 ---
 
 ## 5. Updating selectors for your org
@@ -536,6 +538,25 @@ npm run extract:contract -- 00000100 --subscriptions-only
 ```
 
 Useful before seeding a Contract/Subscription tree directly through the API, since a page layout shows neither which of a Contract's ~160 fields the API will actually accept nor which ones CPQ populates on its own.
+
+### 13.3 Published reports (GitHub Pages)
+
+The nightly `suite` job publishes its Allure report to GitHub Pages at `https://<owner>.github.io/<repo>/`. The deployed site root **is** the report — there's no wrapper index page and no per-run subdirectory.
+
+- **Only the nightly `suite` job publishes.** The merge gate in `playwright.yml` deliberately does not: it runs a matrix of tag slices, so each job holds a fraction of the suite, and publishing any one of them would put a partial report at the site root every time someone opened a pull request.
+- **The site is always the latest nightly, and there is no archive.** Each run replaces the previous deployment. That's not a gap — the `report-suite` and `allure-results-suite` artifacts already retain 30 days of history on the run itself, so an older report is a download away.
+- **Trend history carries forward.** Before generating, the publish job fetches Allure's five history files (`history.json`, `history-trend.json`, `duration-trend.json`, `categories-trend.json`, `retry-trend.json`) from the currently published site into `.allure-history/`, and `scripts/prepare-allure.js` seeds them into `allure-results/history/`. The trend keeps Allure's built-in default of **20 runs** (and 5 prior results per test in `history.json`); nothing here configures a deeper retention. A missing history is expected on the first publish and is logged, not failed.
+- **The report is never generated from an empty result set.** `scripts/prepare-allure.js` counts `*-result.json` files and exits non-zero if there are none, because `allure generate` would otherwise produce a perfectly valid report with zero tests in it, exit 0, and deploy it over the last good one.
+- **One-time manual setup, which no script can do for you:** in **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**. Until that's set, `actions/deploy-pages` fails. No Salesforce secrets are involved — the publish job touches no org.
+
+**What the published report contains.** The report is published intact, including every evidence screenshot. Those are screenshots of a live Salesforce org and show account names, quote numbers, product and pricing data, and the org's instance URL. A GitHub Pages site is reachable by anyone on the internet unless the account's plan supports access-controlled Pages.
+
+Build the same report locally:
+
+```bash
+npm run allure:ci   # prepare-allure.js (guard + history seed), then allure generate
+npm run allure:open
+```
 
 ---
 

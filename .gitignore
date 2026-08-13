@@ -7,6 +7,9 @@ playwright-report/
 allure-report/
 allure-results/
 test-results/
+# The previously published report's Allure trend files, fetched from the live
+# GitHub Pages site by the nightly publish job so the trend carries forward.
+.allure-history/
 # Per-worker ledger shards and journey state hand-off files. Transient — the
 # shards are folded into data/e2e-run-ledger.xlsx by scripts/merge-ledger.js
 # at the end of each run.

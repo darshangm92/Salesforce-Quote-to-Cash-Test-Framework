@@ -98,14 +98,124 @@ jobs:
           # playwright-report/ and test-results/ hold one subdirectory PER LANE
           # (the reporter and artifact paths are split so concurrent lanes do
           # not overwrite each other), so these paths capture every lane.
-          # allure-results/ is deliberately shared and needs no split.
           path: |
             playwright-report/
             test-results/
-            allure-results/
             artifacts/
             data/e2e-run-ledger.xlsx
           retention-days: 30
+      # allure-results/ is uploaded SEPARATELY rather than inside report-suite,
+      # because it holds its own copy of every evidence attachment — one PNG per
+      # documented validation point, already captured above under artifacts/ —
+      # and carrying it in both would double the storage for a directory only
+      # the publish job below reads.
+      #
+      # BEHAVIOUR CHANGE for anyone with the old habit: raw Allure results now
+      # come from the allure-results-suite artifact, not from report-suite.
+      #
+      # It is deliberately NOT split per lane. allure-playwright writes one
+      # uniquely-named file per test, so concurrent lanes can share one
+      # directory safely, and keeping them together is what lets a single
+      # generate cover the whole run.
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: allure-results-suite
+          path: allure-results/
+          retention-days: 30
+
+  # Publishes the Allure report from the run above to GitHub Pages, as a single
+  # always-current report at the site root. No org access, no Salesforce
+  # secrets — it only reads an artifact and deploys static files.
+  #
+  # REQUIRES A ONE-TIME MANUAL SETTING that cannot be scripted: Settings →
+  # Pages → Build and deployment → Source must be "GitHub Actions". Without it,
+  # actions/deploy-pages fails.
+  publish:
+    needs: suite
+    # Both halves of this guard are load-bearing, and they guard different things:
+    #
+    #   !cancelled()                  — a FAILED suite still publishes its report.
+    #                                   A report you only get when everything
+    #                                   passed is a report you never need.
+    #   needs.suite.result != 'skipped' — the sweep-only 01:00 schedule does not
+    #                                   run `suite`, and a skipped dependency
+    #                                   still satisfies !cancelled(). Without
+    #                                   this, the sweep schedule would try to
+    #                                   publish a report from a run that never
+    #                                   happened.
+    if: ${{ !cancelled() && needs.suite.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Scoped to this job, not the workflow: nothing else here needs to write to
+    # Pages or mint an OIDC token.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    # Two overlapping Pages deployments race each other. Queue rather than
+    # cancel — a half-deployed site is worse than a late one.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # allure-commandline is a Java program. ubuntu-latest currently ships a
+      # JDK, but that is a property of the runner image rather than a promise —
+      # installing one explicitly means an image change cannot turn into a
+      # mystery failure in a job nobody watches at 04:30.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - id: pages
+        uses: actions/configure-pages@v6
+      # Allure's trend is read out of allure-results/history/ — it is NOT
+      # derived from the results. The only copy of those files is the currently
+      # published site (allure-report/ is gitignored and CI starts from a clean
+      # checkout), so they have to be fetched back before generating.
+      #
+      # Every fetch tolerates a miss. A first publish has no site to read, and
+      # an access-controlled Pages site answers 403. Both are expected, neither
+      # is a failure, and prepare-allure.js logs which happened.
+      - name: Fetch the published report's trend history
+        run: |
+          mkdir -p .allure-history
+          for file in history.json history-trend.json duration-trend.json categories-trend.json retry-trend.json; do
+            curl --fail --silent --show-error \
+              --output ".allure-history/$file" \
+              "${{ steps.pages.outputs.base_url }}/history/$file" || true
+          done
+          ls -l .allure-history || true
+      # Into the workspace root, so allure-results/ lands exactly where
+      # playwright.config.js puts it locally and `npm run allure:ci` needs no
+      # CI-specific path. This job consumes ONLY allure-results-suite — never
+      # report-suite, which holds the Playwright report and the ledger and is
+      # not published anywhere.
+      #
+      # Pinned to v7 to match actions/upload-artifact@v7 above — the two are
+      # one artifact generation and are kept in step deliberately.
+      - uses: actions/download-artifact@v7
+        with:
+          name: allure-results-suite
+          path: allure-results
+      # The same entry point a human runs locally. Inlining `allure generate`
+      # here would be a second definition of how the report is built, and the
+      # empty-results guard lives inside the script rather than in the YAML.
+      - run: npm run allure:ci
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: allure-report
+      - id: deploy
+        uses: actions/deploy-pages@v5
 
   sweep:
     if: github.event.schedule == '0 1 * * *' || (github.event_name == 'workflow_dispatch' && inputs.run_sweep)
