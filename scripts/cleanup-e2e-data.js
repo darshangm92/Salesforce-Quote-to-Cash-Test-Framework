@@ -36,11 +36,13 @@
 //   node scripts/cleanup-e2e-data.js --confirm
 //   node scripts/cleanup-e2e-data.js --confirm --retention-days=3
 //   node scripts/cleanup-e2e-data.js --confirm --no-purge   # leave the bin
+//   node scripts/cleanup-e2e-data.js --confirm --purge-retention-days=1
 //
-// --confirm also PURGES THE RECYCLE BIN of allowlisted records past the
-// cutoff. A soft-deleted record keeps consuming org data storage for 15 days,
-// so without that pass a sweep frees no storage at all. See the purge section
-// below for the measurement that made this necessary.
+// --confirm also PURGES THE RECYCLE BIN of every soft-deleted allowlisted
+// record. A soft-deleted record keeps consuming org data storage for 15 days,
+// so without that pass a sweep frees no storage at all. The purge does NOT
+// inherit --retention-days; see the purge section below for the measurement
+// that made both the pass and that separation necessary.
 const fs = require('fs');
 const { request } = require('@playwright/test');
 const XLSX = require('xlsx');
@@ -256,16 +258,31 @@ class OrgAdmin {
    * would silently purge only the first page and report success.
    */
   async queryAll(soql) {
-    let res = await this.ctx.get(`/services/data/${env.apiVersion}/queryAll`, {
+    return this._queryPaged('queryAll', soql);
+  }
+
+  /**
+   * Paged /query — live records only. The plain query() above returns the
+   * first page and stops, which is fine for the handful of rows the plan
+   * queries ask for and wrong for a housekeeping scan running to thousands.
+   */
+  async queryPaged(soql) {
+    return this._queryPaged('query', soql);
+  }
+
+  async _queryPaged(endpoint, soql) {
+    let res = await this.ctx.get(`/services/data/${env.apiVersion}/${endpoint}`, {
       params: { q: soql },
     });
-    if (!res.ok()) throw new Error(`queryAll failed (${res.status()}): ${await res.text()}`);
+    if (!res.ok()) throw new Error(`${endpoint} failed (${res.status()}): ${await res.text()}`);
 
     let body = await res.json();
     const records = body.records || [];
     while (!body.done && body.nextRecordsUrl) {
       res = await this.ctx.get(body.nextRecordsUrl);
-      if (!res.ok()) throw new Error(`queryAll paging failed (${res.status()}): ${await res.text()}`);
+      if (!res.ok()) {
+        throw new Error(`${endpoint} paging failed (${res.status()}): ${await res.text()}`);
+      }
       body = await res.json();
       records.push(...(body.records || []));
     }
@@ -360,6 +377,48 @@ class OrgAdmin {
    * another process, or a manual cleanup. Reporting those as errors buries the
    * genuine failures in noise.
    */
+  /**
+   * Deletes up to 200 records in ONE call, via sObject Collections.
+   *
+   * Used by the housekeeping pass, where the counts are in the thousands and
+   * one DELETE per record is the wrong shape twice over: it takes minutes, and
+   * it spends a percentage point of the org's 15,000-per-day API allowance on
+   * a cleanup job. 1528 individual deletes become 8 calls.
+   *
+   * NOT used for the suite's own records. Those are a couple of dozen at most,
+   * each needs its own outcome reported against a plan a human is reading, and
+   * several depend on an unblock that only makes sense one record at a time.
+   *
+   * allOrNone=false, deliberately: one undeletable row must not roll back the
+   * other 199.
+   */
+  async removeMany(sobject, ids) {
+    const res = await this.ctx.delete(
+      `/services/data/${env.apiVersion}/composite/sobjects` +
+        `?ids=${ids.join(',')}&allOrNone=false`
+    );
+    if (!res.ok()) {
+      throw new Error(`Bulk delete ${sobject} failed (${res.status()}): ${await res.text()}`);
+    }
+
+    const results = await res.json();
+    let deleted = 0;
+    const failures = [];
+    results.forEach((result, i) => {
+      if (result.success) {
+        deleted += 1;
+        return;
+      }
+      const first = (result.errors && result.errors[0]) || {};
+      // Same idempotence rule as remove(): already gone is the desired state.
+      if (/ENTITY_IS_DELETED|NOT_FOUND|INVALID_CROSS_REFERENCE_KEY/.test(first.statusCode || '')) {
+        return;
+      }
+      failures.push({ id: ids[i], message: `${first.statusCode}: ${first.message}` });
+    });
+    return { deleted, failures };
+  }
+
   async remove(sobject, id) {
     const res = await this.ctx.delete(
       `/services/data/${env.apiVersion}/sobjects/${sobject}/${id}`
@@ -806,6 +865,113 @@ async function unblock(admin, plan, execute) {
 }
 
 // ---------------------------------------------------------------------------
+// Package housekeeping
+//
+// THE LARGEST CONSUMER OF THIS ORG'S STORAGE IS NOT THE SUITE'S DATA. MEASURED
+// 2026-08-29 via /limits/recordCount: SBQQ__RecordJob__c held 1585 rows dating
+// back to 2025-01-14, against 781 live records across all ten allowlisted
+// objects combined. At Salesforce's nominal 2 KB per record that is roughly
+// 3.1 MB of a 5 MB Developer org — more than everything this suite creates,
+// several times over.
+//
+// SBQQ__RecordJob__c is CPQ's own async-job receipt: one row per queued
+// calculation or contracting job, carrying SBQQ__JobId__c, SBQQ__JobStatus__c,
+// SBQQ__Stacktrace__c and SBQQ__RedirectUrl__c. The package writes them and
+// never removes them, so they accumulate for the life of the org. They are
+// status records for jobs that finished long ago.
+//
+// WHY THIS IS A SEPARATE PASS AND NOT AN ELEVENTH ENTRY IN DELETE_ORDER.
+// Everything on the allowlist is verified by marker or ancestry before it can
+// be deleted — the suite created it, so the suite can prove ownership. This
+// object fails every one of those tests: the PACKAGE creates it, not the
+// suite, so there is no Description to stamp, no ledger row, and no lookup
+// path back to a marked record. Folding it into the allowlist would mean
+// weakening verifyCandidates for one object and quietly weakening it for the
+// other ten. It gets its own list, its own age gate and its own reporting
+// instead, so the safety model above stays exactly as strong as it reads.
+//
+// The age gate is the ONLY protection here, which is why it is not optional.
+// --no-housekeeping skips the pass entirely.
+//
+// MEASURED OUTCOME 2026-08-29: 1528 SBQQ__RecordJob__c deleted and purged,
+// leaving 99 inside retention, and /limits went from Max 5 / Remaining 0 to
+// Max 5 / Remaining 3. That is the whole fix for the storage exhaustion —
+// purging the suite's own bin backlog first had freed 1629 records and left
+// the very next full-suite run still hitting STORAGE_LIMIT_EXCEEDED.
+// ---------------------------------------------------------------------------
+
+// Package-owned transient records: written by the managed package as a
+// by-product, never read back by anything, and safe to remove once past
+// retention. NOT suite-owned data, and deliberately NOT in ALLOWLIST.
+const HOUSEKEEPING = [
+  {
+    sobject: 'SBQQ__RecordJob__c',
+    dateField: 'CreatedDate',
+    why: "CPQ async-job receipts — one per queued calculation or contracting job",
+  },
+];
+
+/**
+ * Deletes package housekeeping records past the cutoff.
+ *
+ * Age is the whole safety story for this pass, so the cutoff is required and
+ * every query states it explicitly.
+ */
+async function sweepHousekeeping(admin, cutoff, execute) {
+  const summary = [];
+
+  for (const { sobject, dateField, why } of HOUSEKEEPING) {
+    // Belt and braces: this list is separate from the allowlist, so it needs
+    // its own check that nobody has added something protected to it.
+    if (DENYLIST.has(sobject)) {
+      throw new Error(`Refusing to run: ${sobject} is on the denylist but also in HOUSEKEEPING.`);
+    }
+
+    let records;
+    try {
+      // query(), NOT queryAll() — queryAll includes soft-deleted rows, so it
+      // re-finds everything a previous run already deleted and reports 1528
+      // records to delete on an org where 99 are live. Caught on the dry run
+      // immediately after the first housekeeping sweep, which still offered
+      // the same 1528 it had just removed.
+      records = await admin.queryPaged(
+        `SELECT Id FROM ${sobject} WHERE ${dateField} < ${soqlDateTime(cutoff)}`
+      );
+    } catch (e) {
+      console.warn(`  Housekeeping scan skipped for ${sobject}: ${e.message}`);
+      continue;
+    }
+
+    summary.push({ sobject, why, count: records.length, ids: records.map((r) => r.Id) });
+  }
+
+  if (!execute) return { summary, deleted: 0, failed: 0 };
+
+  let deleted = 0;
+  let failed = 0;
+  for (const entry of summary) {
+    for (const batch of chunk(entry.ids)) {
+      try {
+        const { deleted: ok, failures } = await admin.removeMany(entry.sobject, batch);
+        deleted += ok;
+        failed += failures.length;
+        for (const failure of failures.slice(0, 3)) {
+          console.warn(`  Delete ${entry.sobject} ${failure.id} failed: ${failure.message}`);
+        }
+        if (failures.length > 3) {
+          console.warn(`  ... and ${failures.length - 3} more in this batch`);
+        }
+      } catch (e) {
+        failed += batch.length;
+        console.warn(`  ${e.message}`);
+      }
+    }
+  }
+
+  return { summary, deleted, failed };
+}
+
+// ---------------------------------------------------------------------------
 // Recycle Bin purge
 //
 // WHY THIS EXISTS: A DELETED RECORD KEEPS CONSUMING DATA STORAGE. Salesforce's
@@ -834,7 +1000,15 @@ async function unblock(admin, plan, execute) {
 //
 // A useful consequence: DataStorageMB in /limits is recalculated periodically
 // rather than live, so it still read 0 remaining right after the purge. Do not
-// use it to check whether this worked — attempt a create instead.
+// use it to judge a purge you have JUST run — attempt a create instead. It
+// does catch up: after the housekeeping pass below ran, the same endpoint read
+// Max 5 / Remaining 3.
+//
+// AND THE PURGE ALONE WAS NOT THE FIX. It was necessary and not sufficient —
+// see the package housekeeping section above, which is where the 3 MB actually
+// came from. Both passes are needed: housekeeping deletes the bulk, and
+// without the purge those deletes would sit in the bin for 15 days and free
+// nothing.
 //
 // THE BULK OF THAT BACKLOG NEVER PASSED THROUGH THIS SCRIPT. Per-test
 // CpqDataFactory.cleanup() deletes its own records at the end of every test,
@@ -848,27 +1022,45 @@ async function unblock(admin, plan, execute) {
 //   - ALLOWLIST ONLY. DELETE_ORDER is the exhaustive list, so Account and
 //     every configuration object on the denylist are unreachable, exactly as
 //     they are for the deletes.
-//   - The same --retention-days cutoff on CreatedDate.
 //   - --confirm required. A dry run reports the plan and purges nothing.
 //   - --no-purge opts out entirely, for an org where the Recycle Bin is
 //     someone's undo buffer rather than this suite's exhaust.
+//
+// THE PURGE DOES NOT INHERIT --retention-days, AND THAT IS THE POINT.
+// Retention protects LIVE records from being reclaimed too early. A record in
+// the bin has already passed that gate — either this sweep just deleted it
+// under retention, or a test's own cleanup deleted it deliberately — so
+// re-applying the same age test downstream of a decision already made buys
+// nothing and costs the storage the pass exists to reclaim.
+//
+// MEASURED 2026-08-29, which is how this was found: a purge carrying the
+// 3-day CreatedDate cutoff freed 1629 records, and the very next full-suite
+// run hit STORAGE_LIMIT_EXCEEDED again — 26 times. The bin held 5182 records
+// against 781 live ones across the same objects, and the cutoff was excluding
+// precisely the recent bulk that was filling it. Purge age is therefore its
+// own axis: --purge-retention-days=N if an org needs an undo window, and the
+// default of 0 means every soft-deleted allowlisted record goes.
 // ---------------------------------------------------------------------------
 
 /**
- * Finds soft-deleted allowlisted records older than the cutoff.
+ * Finds soft-deleted allowlisted records eligible for purging.
  *
+ * @param {Date|null} purgeCutoff - null means every soft-deleted allowlisted
+ *   record, which is the default. See --purge-retention-days above.
  * @returns {{ byObject: Map<string, string[]>, total: number }}
  */
-async function recycleBinCandidates(admin, cutoff) {
+async function recycleBinCandidates(admin, purgeCutoff) {
   const byObject = new Map();
   let total = 0;
 
-  for (const sobject of DELETE_ORDER) {
+  // Housekeeping objects included: this pass runs after they are deleted, and
+  // a delete that only reaches the bin has reclaimed nothing.
+  for (const sobject of [...DELETE_ORDER, ...HOUSEKEEPING.map((h) => h.sobject)]) {
     let records;
     try {
       records = await admin.queryAll(
-        `SELECT Id FROM ${sobject} WHERE IsDeleted = true ` +
-          `AND CreatedDate < ${soqlDateTime(cutoff)}`
+        `SELECT Id FROM ${sobject} WHERE IsDeleted = true` +
+          (purgeCutoff ? ` AND CreatedDate < ${soqlDateTime(purgeCutoff)}` : '')
       );
     } catch (e) {
       // One object the running user cannot read must not cost the other nine.
@@ -901,7 +1093,7 @@ async function purgeRecycleBin(admin, byObject) {
   // already done rather than a wasted call. Deleting has the opposite
   // constraint (a live parent cannot go before its children), which is why the
   // two passes walk the list in opposite directions.
-  for (const sobject of [...DELETE_ORDER].reverse()) {
+  for (const sobject of [...HOUSEKEEPING.map((h) => h.sobject), ...DELETE_ORDER].reverse()) {
     const ids = byObject.get(sobject);
     if (!ids || !ids.length) continue;
 
@@ -990,11 +1182,26 @@ function parseArgs(argv) {
   if (!Number.isFinite(retentionDays) || retentionDays < 0) {
     throw new Error(`Invalid retention days: ${retentionArg || process.env.RETENTION_DAYS}`);
   }
+  // Purge age is a SEPARATE axis from delete retention — see the purge section
+  // for why inheriting --retention-days made the pass ineffective. 0 (the
+  // default) means every soft-deleted allowlisted record is eligible.
+  const purgeArg = argv.find((a) => a.startsWith('--purge-retention-days='));
+  const purgeRetentionDays = Number((purgeArg && purgeArg.split('=')[1]) || 0);
+  if (!Number.isFinite(purgeRetentionDays) || purgeRetentionDays < 0) {
+    throw new Error(`Invalid purge retention days: ${purgeArg}`);
+  }
+
   // Deleting is opt-in. Anything other than an explicit --confirm is a dry run.
   // The Recycle Bin purge is on by DEFAULT once --confirm is given, because a
   // sweep that leaves its own output billed against storage for 15 days does
   // not actually reclaim anything. --no-purge opts out.
-  return { confirm: args.has('--confirm'), retentionDays, purge: !args.has('--no-purge') };
+  return {
+    confirm: args.has('--confirm'),
+    retentionDays,
+    purge: !args.has('--no-purge'),
+    purgeRetentionDays,
+    housekeeping: !args.has('--no-housekeeping'),
+  };
 }
 
 /**
@@ -1075,11 +1282,15 @@ function assertDescentIsAllowlisted() {
 }
 
 async function main() {
-  const { confirm, retentionDays, purge } = parseArgs(process.argv.slice(2));
+  const { confirm, retentionDays, purge, purgeRetentionDays, housekeeping } =
+    parseArgs(process.argv.slice(2));
   assertListsDisjoint();
   assertDescentIsAllowlisted();
 
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const purgeCutoff = purgeRetentionDays
+    ? new Date(Date.now() - purgeRetentionDays * 24 * 60 * 60 * 1000)
+    : null;
   const ledgerRows = readLedgerRows();
   console.log(`Read ${ledgerRows.length} ledger row(s).`);
 
@@ -1140,12 +1351,22 @@ async function main() {
     });
 
     if (!confirm) {
+      if (housekeeping) {
+        const { summary } = await sweepHousekeeping(admin, cutoff, false);
+        for (const entry of summary.filter((e) => e.count)) {
+          console.log(
+            `\nHousekeeping — ${entry.count} ${entry.sobject} record(s) older than ` +
+              `${retentionDays}d would be deleted.\n  ${entry.why}.`
+          );
+        }
+      }
       if (purge) {
-        const { total } = await recycleBinCandidates(admin, cutoff);
+        const { total } = await recycleBinCandidates(admin, purgeCutoff);
         console.log(
-          `\nRecycle Bin — ${total} soft-deleted record(s) past the cutoff would be offered\n` +
-            '  for purging. Some are already out of the bin and cost nothing; the rest are\n' +
-            '  still consuming org data storage. Re-run with --confirm.'
+          `\nRecycle Bin — ${total} soft-deleted record(s) would be offered for purging` +
+            `${purgeCutoff ? ` (created before ${purgeCutoff.toISOString()})` : ''}.\n` +
+            '  Some are already out of the bin and cost nothing; the rest are still\n' +
+            '  consuming org data storage. Re-run with --confirm.'
         );
       }
       return;
@@ -1213,12 +1434,32 @@ async function main() {
         `, ${failed} failure(s).`
     );
 
+    // Package housekeeping, before the purge for the same reason the suite's
+    // own deletes are: whatever this removes has to reach the bin in time for
+    // the purge below to reclaim it in the same run.
+    if (housekeeping) {
+      const { summary, deleted: hkDeleted, failed: hkFailed } = await sweepHousekeeping(
+        admin,
+        cutoff,
+        true
+      );
+      const planned = summary.reduce((n, e) => n + e.count, 0);
+      if (planned) {
+        console.log(
+          `\nHousekeeping: deleted ${hkDeleted} of ${planned} package record(s) older than ` +
+            `${retentionDays}d` +
+            (hkFailed ? `, ${hkFailed} failure(s)` : '') +
+            ` — ${summary.map((e) => `${e.count} ${e.sobject}`).join(', ')}.`
+        );
+      }
+    }
+
     // AFTER the deletes, never before: everything just removed is now sitting
     // in the Recycle Bin consuming exactly the storage this sweep set out to
     // reclaim. Purging first would leave this run's own output behind for 15
     // days and make the sweep a no-op in storage terms.
     if (purge) {
-      const { byObject, total } = await recycleBinCandidates(admin, cutoff);
+      const { byObject, total } = await recycleBinCandidates(admin, purgeCutoff);
       if (!total) {
         console.log('\nRecycle Bin: nothing past the cutoff to purge.');
       } else {
