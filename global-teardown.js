@@ -39,6 +39,23 @@ module.exports = async () => {
   // Session files are left in place locally so the next `npm run test:dev`
   // doesn't have to re-authenticate; on CI the runner is ephemeral anyway,
   // so we proactively wipe the token rather than leave it on disk.
+  //
+  // CPQ_REUSE_SESSION — the SAME hazard as the ledger merge above, and it bit
+  // for real. That flag marks a CHILD launched by scripts/run-parallel.js, and
+  // .auth/ is shared by every lane. On CI the first lane to finish was wiping
+  // the session directory out from under the lanes still running, which they
+  // then hit as
+  //
+  //   Error: Cannot find module '../../.auth/sf-session.json'
+  //   Error: ENOENT: no such file or directory, open '.auth/session.json'
+  //
+  // — errors that name a missing file rather than the sibling process that
+  // removed it, in lanes that had nothing wrong with them. Observed in the
+  // nightly run of 2026-08-28 across the pricing-methods, solar and quote
+  // lanes. A child cleans up nothing shared; the parent wipes once, after the
+  // last lane has exited.
+  if (process.env.CPQ_REUSE_SESSION === '1') return;
+
   const authDir = path.join(__dirname, '.auth');
   if (process.env.CI && fs.existsSync(authDir)) {
     fs.rmSync(authDir, { recursive: true, force: true });

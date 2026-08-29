@@ -35,6 +35,12 @@
 //   node scripts/cleanup-e2e-data.js --dry-run
 //   node scripts/cleanup-e2e-data.js --confirm
 //   node scripts/cleanup-e2e-data.js --confirm --retention-days=3
+//   node scripts/cleanup-e2e-data.js --confirm --no-purge   # leave the bin
+//
+// --confirm also PURGES THE RECYCLE BIN of allowlisted records past the
+// cutoff. A soft-deleted record keeps consuming org data storage for 15 days,
+// so without that pass a sweep frees no storage at all. See the purge section
+// below for the measurement that made this necessary.
 const fs = require('fs');
 const { request } = require('@playwright/test');
 const XLSX = require('xlsx');
@@ -50,16 +56,31 @@ const DEFAULT_RETENTION_DAYS = 3;
 // Deletion order: children strictly before parents, mirroring the reverse
 // order CpqDataFactory.cleanup() uses. This list is also the allowlist —
 // an sObject not named here is never deleted by this script.
+//
+// SBQQ__Subscription__c SITS AFTER THE QUOTES, WHICH IS NOT WHERE PARENTAGE
+// WOULD PUT IT. MEASURED in the nightly sweep of 2026-08-28: with it in its
+// old position (third, before Contract) four of seven subscriptions refused to
+// delete with
+//
+//   Your attempt to delete SUB-0000251 could not be completed because it is
+//   associated with the following quote lines.: QL-0005393
+//
+// An amendment or renewal quote line points BACK at the subscription it
+// revises or renews, so the subscription is not merely a child of its
+// Contract — it is also referenced by rows that this same plan deletes later.
+// Ordering it before those rows guarantees the reference is still live at the
+// moment of the delete. It stays ahead of Opportunity because the quotes hang
+// off the opportunities.
 const DELETE_ORDER = [
   'OpportunityLineItem',
   'Asset',
-  'SBQQ__Subscription__c',
   'Contract',
   'OrderItem',
   'Order',
   'SBQQ__QuoteLine__c',
   'SBQQ__QuoteLineGroup__c',
   'SBQQ__Quote__c',
+  'SBQQ__Subscription__c',
   'Opportunity',
 ];
 const ALLOWLIST = new Set(DELETE_ORDER);
@@ -202,6 +223,9 @@ class OrgAdmin {
     });
     const admin = new OrgAdmin(ctx);
     admin.instanceUrl = session.instanceUrl;
+    // Kept for emptyRecycleBin(), which needs it as a SOAP session id rather
+    // than as a bearer header.
+    admin.accessToken = session.accessToken;
 
     // The integration user's Id. The SOQL safety net narrows to records this
     // user created — both to keep the scan small and because a record the
@@ -220,6 +244,101 @@ class OrgAdmin {
     });
     if (!res.ok()) throw new Error(`Query failed (${res.status()}): ${await res.text()}`);
     return (await res.json()).records || [];
+  }
+
+  /**
+   * queryAll, which differs from query in the one way that matters here: it
+   * returns soft-deleted records too. A record in the Recycle Bin is invisible
+   * to /query, so the purge below cannot find its own targets without this.
+   *
+   * Paged, because the backlog this exists to clear runs to thousands of rows
+   * and the first response caps at 2000. Skipping the nextRecordsUrl walk
+   * would silently purge only the first page and report success.
+   */
+  async queryAll(soql) {
+    let res = await this.ctx.get(`/services/data/${env.apiVersion}/queryAll`, {
+      params: { q: soql },
+    });
+    if (!res.ok()) throw new Error(`queryAll failed (${res.status()}): ${await res.text()}`);
+
+    let body = await res.json();
+    const records = body.records || [];
+    while (!body.done && body.nextRecordsUrl) {
+      res = await this.ctx.get(body.nextRecordsUrl);
+      if (!res.ok()) throw new Error(`queryAll paging failed (${res.status()}): ${await res.text()}`);
+      body = await res.json();
+      records.push(...(body.records || []));
+    }
+    return records;
+  }
+
+  /**
+   * Permanently removes records from the Recycle Bin, 200 Ids at a time.
+   *
+   * THIS IS SOAP BECAUSE REST HAS NO EQUIVALENT. emptyRecycleBin() exists only
+   * on the SOAP APIs; the REST DELETE verb is a SOFT delete and always has
+   * been. The alternative is Bulk API 2.0's hardDelete operation, which needs
+   * the "Bulk API Hard Delete" profile permission that this org's integration
+   * user does not have — so a one-call SOAP envelope against the partner
+   * endpoint, reusing the same access token as a session id, is the cheaper
+   * path by a wide margin.
+   *
+   * Returns { purged, failures } rather than throwing on a per-record refusal:
+   * a record someone else already purged, or one that was never in the bin, is
+   * not a reason to abandon the other 199 in the chunk.
+   */
+  async emptyRecycleBin(ids) {
+    // The partner WSDL is versioned without the 'v' that REST carries.
+    const soapVersion = String(env.apiVersion).replace(/^v/, '');
+    const idElements = ids.map((id) => `<urn:ids>${id}</urn:ids>`).join('');
+    const envelope =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" ' +
+      'xmlns:urn="urn:partner.soap.sforce.com">' +
+      `<soapenv:Header><urn:SessionHeader><urn:sessionId>${this.accessToken}</urn:sessionId>` +
+      '</urn:SessionHeader></soapenv:Header>' +
+      `<soapenv:Body><urn:emptyRecycleBin>${idElements}</urn:emptyRecycleBin></soapenv:Body>` +
+      '</soapenv:Envelope>';
+
+    const res = await this.ctx.post(`/services/Soap/u/${soapVersion}`, {
+      headers: { 'Content-Type': 'text/xml; charset=UTF-8', SOAPAction: '""' },
+      data: envelope,
+    });
+    const body = await res.text();
+    if (!res.ok()) {
+      throw new Error(`emptyRecycleBin failed (${res.status()}): ${body.slice(0, 500)}`);
+    }
+
+    // One <result> per Id, in request order. Parsed with a regex rather than an
+    // XML library on purpose: the response shape is three known tags and
+    // adding a parser dependency to a script that has none is a poor trade.
+    const results = body.match(/<result>[\s\S]*?<\/result>/g) || [];
+    let purged = 0;
+    let notInBin = 0;
+    const failures = [];
+    results.forEach((result, i) => {
+      if (/<success>true<\/success>/.test(result)) {
+        purged += 1;
+        return;
+      }
+      const message = (result.match(/<message>([\s\S]*?)<\/message>/) || [, 'unknown error'])[1];
+
+      // "no recycle bin entry found" IS NOT A FAILURE, and reading it as one
+      // is how this pass first reported 2878 errors against 1629 real purges.
+      // A deleted record is queryable through queryAll for 15 days whether or
+      // not it is still IN the Recycle Bin, and two ordinary things take it
+      // out early: a cascade-deleted child never gets a bin entry of its own
+      // (it is restored and purged with its parent), and the bin itself has a
+      // capacity cap above which the platform evicts the oldest entries. Both
+      // mean the record is already costing no storage, which is the outcome
+      // this pass wants.
+      if (/no recycle bin entry found/i.test(message)) {
+        notInBin += 1;
+        return;
+      }
+      failures.push({ id: ids[i], message });
+    });
+    return { purged, notInBin, failures };
   }
 
   async patch(sobject, id, payload) {
@@ -687,6 +806,130 @@ async function unblock(admin, plan, execute) {
 }
 
 // ---------------------------------------------------------------------------
+// Recycle Bin purge
+//
+// WHY THIS EXISTS: A DELETED RECORD KEEPS CONSUMING DATA STORAGE. Salesforce's
+// REST DELETE is a soft delete — the record moves to the Recycle Bin and sits
+// there for 15 days, still counted against the org's storage limit, before the
+// platform purges it. Nothing in this framework emptied that bin, so every
+// record the suite ever deleted stayed billed against storage for a fortnight.
+//
+// MEASURED on the Developer org 2026-08-29, which is what this is here for:
+// 5 MB of data storage, 0 MB REMAINING, against roughly 1,500 live records.
+// Every write in the nightly suite was failing STORAGE_LIMIT_EXCEEDED — which
+// surfaces in the specs as a Lightning modal that will not close or a poll
+// that never satisfies, never as anything mentioning storage. Running this
+// pass freed the org: 1629 records purged, and a create that had been
+// rejected succeeded immediately afterwards.
+//
+// COUNTING THE BACKLOG IS NOT AS DIRECT AS IT LOOKS, and the first attempt at
+// it was wrong in a way worth recording. `queryAll ... WHERE IsDeleted = true`
+// returned 4758 rows, which reads like 4758 records sitting in the bin. It is
+// not: that query answers the 15-day DELETE-TRACKING window, which a record
+// stays in whether or not it is still in the Recycle Bin. Only 1629 of the
+// 4758 actually held a bin entry; the rest were cascade-deleted children
+// (which never get one) or entries the platform had already evicted. There is
+// no query for bin membership, so this pass still scans the wider set and
+// lets emptyRecycleBin sort them out — see the notInBin handling above.
+//
+// A useful consequence: DataStorageMB in /limits is recalculated periodically
+// rather than live, so it still read 0 remaining right after the purge. Do not
+// use it to check whether this worked — attempt a create instead.
+//
+// THE BULK OF THAT BACKLOG NEVER PASSED THROUGH THIS SCRIPT. Per-test
+// CpqDataFactory.cleanup() deletes its own records at the end of every test,
+// on every green run, and those deletes land in the bin exactly like this
+// script's do. So purging only the Ids this sweep deleted would leave the
+// actual problem untouched; the pass has to sweep the bin itself.
+//
+// SAFETY. Same posture as the deletes above, and the bar is met more easily
+// here because every target is a record someone has ALREADY deleted — this
+// makes an existing deletion permanent, it does not delete anything live:
+//   - ALLOWLIST ONLY. DELETE_ORDER is the exhaustive list, so Account and
+//     every configuration object on the denylist are unreachable, exactly as
+//     they are for the deletes.
+//   - The same --retention-days cutoff on CreatedDate.
+//   - --confirm required. A dry run reports the plan and purges nothing.
+//   - --no-purge opts out entirely, for an org where the Recycle Bin is
+//     someone's undo buffer rather than this suite's exhaust.
+// ---------------------------------------------------------------------------
+
+/**
+ * Finds soft-deleted allowlisted records older than the cutoff.
+ *
+ * @returns {{ byObject: Map<string, string[]>, total: number }}
+ */
+async function recycleBinCandidates(admin, cutoff) {
+  const byObject = new Map();
+  let total = 0;
+
+  for (const sobject of DELETE_ORDER) {
+    let records;
+    try {
+      records = await admin.queryAll(
+        `SELECT Id FROM ${sobject} WHERE IsDeleted = true ` +
+          `AND CreatedDate < ${soqlDateTime(cutoff)}`
+      );
+    } catch (e) {
+      // One object the running user cannot read must not cost the other nine.
+      console.warn(`  Recycle Bin scan skipped for ${sobject}: ${e.message}`);
+      continue;
+    }
+    if (!records.length) continue;
+    byObject.set(sobject, records.map((r) => r.Id));
+    total += records.length;
+  }
+
+  return { byObject, total };
+}
+
+/**
+ * Permanently purges the candidates.
+ *
+ * @returns {{ purged: number, notInBin: number, failed: number }} — only
+ *   `purged` is storage actually returned to the org. See the loop below for
+ *   why the walk runs parents-first, against the deletion order.
+ */
+async function purgeRecycleBin(admin, byObject) {
+  let purged = 0;
+  let notInBin = 0;
+  let failed = 0;
+
+  // PARENTS FIRST — the reverse of DELETE_ORDER, and the opposite of what the
+  // deletes above do. Purging a parent from the bin takes its cascade-deleted
+  // children with it, so going parent-first turns a child's entry into work
+  // already done rather than a wasted call. Deleting has the opposite
+  // constraint (a live parent cannot go before its children), which is why the
+  // two passes walk the list in opposite directions.
+  for (const sobject of [...DELETE_ORDER].reverse()) {
+    const ids = byObject.get(sobject);
+    if (!ids || !ids.length) continue;
+
+    for (const batch of chunk(ids)) {
+      try {
+        const { purged: ok, notInBin: absent, failures } = await admin.emptyRecycleBin(batch);
+        purged += ok;
+        notInBin += absent;
+        failed += failures.length;
+        // Capped: a systematic refusal produces one message per record, and
+        // thousands of identical lines bury everything else in the log.
+        for (const failure of failures.slice(0, 5)) {
+          console.warn(`  Purge ${sobject} ${failure.id} failed: ${failure.message}`);
+        }
+        if (failures.length > 5) {
+          console.warn(`  ... and ${failures.length - 5} more ${sobject} purge failure(s)`);
+        }
+      } catch (e) {
+        failed += batch.length;
+        console.warn(`  Purge batch of ${batch.length} ${sobject} failed: ${e.message}`);
+      }
+    }
+  }
+
+  return { purged, notInBin, failed };
+}
+
+// ---------------------------------------------------------------------------
 // Reporting and main
 // ---------------------------------------------------------------------------
 
@@ -748,7 +991,10 @@ function parseArgs(argv) {
     throw new Error(`Invalid retention days: ${retentionArg || process.env.RETENTION_DAYS}`);
   }
   // Deleting is opt-in. Anything other than an explicit --confirm is a dry run.
-  return { confirm: args.has('--confirm'), retentionDays };
+  // The Recycle Bin purge is on by DEFAULT once --confirm is given, because a
+  // sweep that leaves its own output billed against storage for 15 days does
+  // not actually reclaim anything. --no-purge opts out.
+  return { confirm: args.has('--confirm'), retentionDays, purge: !args.has('--no-purge') };
 }
 
 /**
@@ -829,7 +1075,7 @@ function assertDescentIsAllowlisted() {
 }
 
 async function main() {
-  const { confirm, retentionDays } = parseArgs(process.argv.slice(2));
+  const { confirm, retentionDays, purge } = parseArgs(process.argv.slice(2));
   assertListsDisjoint();
   assertDescentIsAllowlisted();
 
@@ -893,19 +1139,70 @@ async function main() {
       cascaded,
     });
 
-    if (!confirm) return;
+    if (!confirm) {
+      if (purge) {
+        const { total } = await recycleBinCandidates(admin, cutoff);
+        console.log(
+          `\nRecycle Bin — ${total} soft-deleted record(s) past the cutoff would be offered\n` +
+            '  for purging. Some are already out of the bin and cost nothing; the rest are\n' +
+            '  still consuming org data storage. Re-run with --confirm.'
+        );
+      }
+      return;
+    }
 
     let deleted = 0;
     let alreadyGone = 0;
-    let failed = 0;
+    const retryQueue = [];
     for (const candidate of plan) {
       try {
         const outcome = await admin.remove(candidate.sobject, candidate.id);
         if (outcome === 'already-gone') alreadyGone += 1;
         else deleted += 1;
       } catch (e) {
-        failed += 1;
-        console.warn(`  ${e.message}`);
+        retryQueue.push({ candidate, message: e.message });
+      }
+    }
+
+    // SECOND PASS — re-unblock, then retry.
+    //
+    // The pre-delete unblock above runs before ANY delete, which is right for
+    // the quote-primary flags but wrong for a CONTRACTED order. MEASURED in
+    // the nightly sweep of 2026-08-28: four Orders refused Status -> Draft
+    // with "Contracted order or order products cannot be deactivated", and
+    // then refused deletion with "Cannot delete an order with active
+    // products". Both are true only while the Contract still exists — and by
+    // the time the first pass reaches the Orders, DELETE_ORDER has already
+    // removed the Contracts. So the revert that was impossible before the
+    // sweep started is straightforward now, and only the retry can see that.
+    //
+    // Deliberately a retry pass rather than a re-ordering of unblock(): the
+    // dependency is emergent (it resolves as the plan drains) and a second
+    // attempt handles it without anyone having to enumerate which blocker
+    // clears which other blocker.
+    let failed = 0;
+    if (retryQueue.length) {
+      console.log(`\nRetrying ${retryQueue.length} failed delete(s) after re-unblocking...`);
+      const retryActions = await unblock(
+        admin,
+        retryQueue.map((r) => r.candidate),
+        true
+      );
+      if (!retryActions.length) {
+        // Nothing to re-attempt means the retry cannot change anything.
+        console.log('  (no applicable unblock actions for the failures)');
+      }
+      for (const { candidate, message } of retryQueue) {
+        try {
+          const outcome = await admin.remove(candidate.sobject, candidate.id);
+          if (outcome === 'already-gone') alreadyGone += 1;
+          else deleted += 1;
+        } catch (e) {
+          failed += 1;
+          // The FIRST message is the diagnostic one — the retry's message is
+          // often a downstream consequence of the same cause.
+          console.warn(`  ${message}`);
+        }
       }
     }
 
@@ -915,6 +1212,26 @@ async function main() {
         (cascaded.length ? `, ${cascaded.length} left to their parent's cascade` : '') +
         `, ${failed} failure(s).`
     );
+
+    // AFTER the deletes, never before: everything just removed is now sitting
+    // in the Recycle Bin consuming exactly the storage this sweep set out to
+    // reclaim. Purging first would leave this run's own output behind for 15
+    // days and make the sweep a no-op in storage terms.
+    if (purge) {
+      const { byObject, total } = await recycleBinCandidates(admin, cutoff);
+      if (!total) {
+        console.log('\nRecycle Bin: nothing past the cutoff to purge.');
+      } else {
+        console.log(`\nPurging ${total} soft-deleted record(s) from the Recycle Bin...`);
+        const { purged, notInBin, failed: purgeFailed } = await purgeRecycleBin(admin, byObject);
+        console.log(
+          `Purged ${purged} record(s) permanently` +
+            (notInBin ? `, ${notInBin} already out of the bin (cascade or platform eviction)` : '') +
+            (purgeFailed ? `, ${purgeFailed} failure(s)` : '') +
+            ' — the purged count is what returns storage to the org.'
+        );
+      }
+    }
   } finally {
     await admin.dispose();
   }
