@@ -1,0 +1,411 @@
+# .github/workflows/allure-showcase.yml
+#
+# Publishes the Allure report of the most recent ALL-GREEN scheduled nightly
+# to a separate repository, darshangm92/cpq-allure-showcase, served by GitHub
+# Pages. Only a newer all-green scheduled nightly replaces what is there.
+#
+# WHY A SEPARATE WORKFLOW, AND A SEPARATE REPOSITORY
+# ----------------------------------------------------
+# nightly.yml's publish job already deploys every nightly report, red or
+# green, to this repository's own Pages site, and replaces it whole each time.
+# A repository has exactly one Pages site, so a second URL that only ever shows
+# a clean run cannot live here, and adding a second deploy to nightly.yml would
+# make the two race for the same site. A separate workflow triggered by
+# workflow_run leaves nightly.yml byte-for-byte unchanged, and a separate
+# repository gives the showcase a URL that the nightly publish can never touch.
+#
+# WHICH RUNS ARE ELIGIBLE, AND WHY THE TEST IS THE `suite` JOB
+# --------------------------------------------------------------
+# Eligible: event == schedule, head_branch == main, and the run's job named
+# `suite` concluded success. Then the Allure results must contain no failed or
+# broken result file (scripts/assert-allure-green.js has the full definition).
+#
+# The workflow CONCLUSION was rejected as the test because it is wrong both
+# ways. The 01:00 UTC sweep-only run concludes success with no tests in it at
+# all. A run whose suite passed but whose publish or sweep failed concludes
+# failure. Only the suite job's own conclusion says whether the tests passed.
+#
+# Manually dispatched nightly runs are NOT eligible, even when green. Their
+# `environment` input can point the suite at a different org, and workflow_run
+# does not carry the triggering run's inputs, so this workflow cannot tell a
+# Developer-org run from a sandbox one. Scheduled runs always use the default.
+#
+# WHAT "NEWER" MEANS
+# --------------------
+# A higher run_number than the one recorded in showcase.json on the live site.
+# run_number rather than run_started_at, because run_number is fixed per run
+# while run_started_at moves when an attempt is re-run. Comparing timestamps
+# would let a re-run of an old nightly replace a newer report. Equal or lower
+# is skipped unless a manual dispatch passes force: true.
+#
+# WHY THERE IS NO TREND HISTORY
+# -------------------------------
+# The showcase shows exactly one run. A trend would be built only from green
+# runs and would imply a stability the suite has not shown. So nothing is
+# fetched into .allure-history/, and prepare-allure.js starts a new trend.
+#
+# WHY A FORCE-PUSHED ORPHAN COMMIT
+# ----------------------------------
+# Each report carries an evidence PNG for every documented validation point.
+# Committing each publish on top of the last would grow the showcase
+# repository by a full set of screenshots every green night. A single orphan
+# commit, force-pushed over main, keeps it at one commit holding one report.
+# GitHub Pages serves a branch, so this needs no Pages API and no
+# deploy-pages token for another repository.
+#
+# CREDENTIALS
+# -------------
+# ALLURE_SHOWCASE_DEPLOY_KEY is an ed25519 private key whose public half is a
+# write-enabled deploy key on the showcase repository only. A personal access
+# token was rejected: one with repo scope, stored in CI, could push to every
+# repository the owner has. This workflow holds no Salesforce secret, touches
+# no org and runs no test.
+name: CPQ Allure Showcase
+
+on:
+  workflow_run:
+    # Matched against the `name:` in nightly.yml, NOT its file name. Renaming
+    # that workflow silently stops this one: no error, no failed run, nothing in
+    # the Actions tab. workflow_run also only fires for this file as it exists
+    # on the default branch, so nothing here runs until it is merged to main.
+    workflows: ["CPQ Nightly"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: CPQ Nightly run id to publish
+        type: string
+        required: true
+      force:
+        description: publish even if it is not newer than what is live
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+# Two publishes must not interleave: each reads the live run_number, then
+# force-pushes. Queue rather than cancel. (GitHub keeps only the newest pending
+# run in a group, which is harmless here: the newest run is the one that would
+# win the "newer" check anyway.)
+concurrency:
+  group: allure-showcase
+  cancel-in-progress: false
+
+env:
+  SHOWCASE_REPO: darshangm92/cpq-allure-showcase
+
+jobs:
+  showcase:
+    # The cheap filter, evaluated before a runner starts. Dispatches are
+    # validated against the same rules in the first step instead, because their
+    # run id is only known once the run has been fetched.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Every value that comes from the event reaches the shell through env:,
+      # never through ${{ }} inside run:. head_branch is user-controlled text (a
+      # branch name), and an expression interpolated into a script is executed
+      # as part of that script.
+      - name: Resolve the source run
+        id: src
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WR_ID: ${{ github.event.workflow_run.id }}
+          WR_NUMBER: ${{ github.event.workflow_run.run_number }}
+          WR_SHA: ${{ github.event.workflow_run.head_sha }}
+          WR_URL: ${{ github.event.workflow_run.html_url }}
+          WR_STARTED: ${{ github.event.workflow_run.run_started_at }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            id="$WR_ID"; number="$WR_NUMBER"; sha="$WR_SHA"; url="$WR_URL"; started="$WR_STARTED"
+          else
+            if ! [[ "$INPUT_RUN_ID" =~ ^[0-9]+$ ]]; then
+              echo "::error::run_id must be a numeric workflow run id, got '$INPUT_RUN_ID'"
+              exit 1
+            fi
+            run_json="$(gh api "repos/$REPO/actions/runs/$INPUT_RUN_ID")"
+            path="$(jq -r '.path' <<<"$run_json")"
+            event="$(jq -r '.event' <<<"$run_json")"
+            branch="$(jq -r '.head_branch' <<<"$run_json")"
+            if [ "$path" != ".github/workflows/nightly.yml" ]; then
+              echo "::error::run $INPUT_RUN_ID is not a CPQ Nightly run (path is '$path')"; exit 1
+            fi
+            if [ "$event" != "schedule" ]; then
+              echo "::error::run $INPUT_RUN_ID was triggered by '$event', not schedule; only scheduled nightlies are eligible"; exit 1
+            fi
+            if [ "$branch" != "main" ]; then
+              echo "::error::run $INPUT_RUN_ID ran on '$branch', not main"; exit 1
+            fi
+            id="$(jq -r '.id' <<<"$run_json")"
+            number="$(jq -r '.run_number' <<<"$run_json")"
+            sha="$(jq -r '.head_sha' <<<"$run_json")"
+            url="$(jq -r '.html_url' <<<"$run_json")"
+            started="$(jq -r '.run_started_at' <<<"$run_json")"
+          fi
+          {
+            echo "id=$id"
+            echo "run_number=$number"
+            echo "head_sha=$sha"
+            echo "html_url=$url"
+            echo "run_started_at=$started"
+          } >> "$GITHUB_OUTPUT"
+          echo "Source: CPQ Nightly #$number ($id) at $sha"
+
+      # The jobs endpoint's default filter=latest returns each job's most recent
+      # ATTEMPT, so a suite that failed and was then re-run green counts as
+      # green here, and the reverse. The sweep-only run has a suite job whose
+      # conclusion is "skipped", which lands in the skip branch below.
+      - name: Check the suite job
+        id: suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.src.outputs.id }}
+          RUN_NUMBER: ${{ steps.src.outputs.run_number }}
+        run: |
+          set -euo pipefail
+          conclusion="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
+            --jq '.jobs[] | select(.name == "suite") | .conclusion')"
+          if [ "$conclusion" = "success" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            shown="${conclusion:-<empty: no suite job, or not finished>}"
+            echo "::notice::CPQ Nightly #$RUN_NUMBER: suite job conclusion is '$shown'; nothing to publish."
+            echo "Skipped: CPQ Nightly #$RUN_NUMBER suite job concluded '$shown'." >> "$GITHUB_STEP_SUMMARY"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The default branch, whatever ref a dispatch was started from, so the
+      # gate and the generator are always the ones on main.
+      - uses: actions/checkout@v7
+        if: steps.suite.outputs.ok == 'true'
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@v7
+        if: steps.suite.outputs.ok == 'true'
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+        if: steps.suite.outputs.ok == 'true'
+      # allure-commandline is a Java program. ubuntu-latest currently ships a
+      # JDK, but that is a property of the runner image rather than a promise.
+      # Installing one explicitly means an image change cannot turn into a
+      # mystery failure in a job nobody watches. Same pin as nightly.yml.
+      - uses: actions/setup-java@v5
+        if: steps.suite.outputs.ok == 'true'
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # A cross-run download: run-id plus a token with actions: read. nightly.yml
+      # keeps this artifact for 30 days, so a backfill of an older run cannot
+      # work and fails here with "artifact not found".
+      - uses: actions/download-artifact@v7
+        if: steps.suite.outputs.ok == 'true'
+        with:
+          name: allure-results-suite
+          path: allure-results
+          run-id: ${{ steps.src.outputs.id }}
+          github-token: ${{ github.token }}
+
+      # Exits 0 for both GREEN and NOT GREEN, and 1 only when the results
+      # cannot be judged. A suite job can conclude success while a test failed
+      # and then passed on retry; that leaves a failed result file, and this is
+      # the step that catches it.
+      - name: Gate on all-green results
+        id: gate
+        if: steps.suite.outputs.ok == 'true'
+        run: node scripts/assert-allure-green.js
+      - name: Report a not-green run
+        if: steps.suite.outputs.ok == 'true' && steps.gate.outputs.green != 'true'
+        env:
+          RUN_NUMBER: ${{ steps.src.outputs.run_number }}
+          PASSED: ${{ steps.gate.outputs.passed }}
+          FAILED: ${{ steps.gate.outputs.failed }}
+          BROKEN: ${{ steps.gate.outputs.broken }}
+          SKIPPED: ${{ steps.gate.outputs.skipped }}
+          TOTAL: ${{ steps.gate.outputs.total }}
+        run: |
+          line="CPQ Nightly #$RUN_NUMBER is not all green: $TOTAL result file(s), passed=$PASSED failed=$FAILED broken=$BROKEN skipped=$SKIPPED. Nothing published."
+          echo "::notice::$line"
+          echo "Skipped: $line" >> "$GITHUB_STEP_SUMMARY"
+
+      # The key is written under $RUNNER_TEMP with mode 600 (ssh refuses a key
+      # anyone else can read) and removed by the always() step at the end.
+      # GIT_SSH_COMMAND goes to $GITHUB_ENV so the push step uses the same key.
+      # accept-new trusts github.com's host key on first contact, which is the
+      # only contact a fresh runner ever has.
+      - name: Clone the showcase repository
+        id: live
+        if: steps.suite.outputs.ok == 'true' && steps.gate.outputs.green == 'true'
+        env:
+          DEPLOY_KEY: ${{ secrets.ALLURE_SHOWCASE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/showcase_key"
+          ( umask 077; printf '%s\n' "$DEPLOY_KEY" > "$key" )
+          chmod 600 "$key"
+          ssh_cmd="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          echo "GIT_SSH_COMMAND=$ssh_cmd" >> "$GITHUB_ENV"
+          GIT_SSH_COMMAND="$ssh_cmd" git clone --depth 1 "git@github.com:$SHOWCASE_REPO.git" showcase-live
+          echo "lease_sha=$(git -C showcase-live rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # Absent on the first publish, when the repository holds only the
+          # README it was created with. A malformed file fails the step rather
+          # than reading as 0, because 0 would let any run overwrite it.
+          if [ -f showcase-live/showcase.json ]; then
+            live_run="$(jq -er '.run_number' showcase-live/showcase.json)"
+          else
+            live_run=0
+          fi
+          echo "live_run=$live_run" >> "$GITHUB_OUTPUT"
+          echo "Live showcase holds run #$live_run"
+
+      - name: Check the run is newer than what is live
+        id: newer
+        if: steps.suite.outputs.ok == 'true' && steps.gate.outputs.green == 'true'
+        env:
+          RUN_NUMBER: ${{ steps.src.outputs.run_number }}
+          LIVE_RUN: ${{ steps.live.outputs.live_run }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$RUN_NUMBER" -gt "$LIVE_RUN" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif [ "$FORCE" = "true" ]; then
+            echo "::notice::run $RUN_NUMBER is not newer than live run $LIVE_RUN, publishing anyway (force: true)"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::run $RUN_NUMBER is not newer than live run $LIVE_RUN, skipping"
+            echo "Skipped: CPQ Nightly #$RUN_NUMBER is not newer than the live showcase run #$LIVE_RUN." >> "$GITHUB_STEP_SUMMARY"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Provenance inside the report itself, so a reader of the public page can
+      # get from it to the exact run and commit without this repository open.
+      - name: Stamp the report with its provenance
+        if: steps.suite.outputs.ok == 'true' && steps.gate.outputs.green == 'true' && steps.newer.outputs.publish == 'true'
+        env:
+          RUN_NUMBER: ${{ steps.src.outputs.run_number }}
+          RUN_URL: ${{ steps.src.outputs.html_url }}
+          HEAD_SHA: ${{ steps.src.outputs.head_sha }}
+          STARTED: ${{ steps.src.outputs.run_started_at }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg buildName "CPQ Nightly #$RUN_NUMBER" \
+            --arg buildUrl "$RUN_URL" \
+            '{name: "GitHub Actions", type: "github", buildName: $buildName, buildUrl: $buildUrl,
+              reportName: "Salesforce CPQ E2E: latest all-green nightly"}' \
+            > allure-results/executor.json
+          {
+            echo "Source.Run=CPQ Nightly #$RUN_NUMBER"
+            echo "Source.Commit=${HEAD_SHA:0:7}"
+            echo "Source.Started=$STARTED"
+            echo "Org=Salesforce Developer Edition"
+            echo "Browser=Chromium"
+            echo "Runner=npm run test:parallel"
+          } > allure-results/environment.properties
+
+      # The same entry point the nightly publish and a human use, so the
+      # empty-results guard in prepare-allure.js still runs. No .allure-history/
+      # exists on this runner, so it logs "this run starts a new trend". That
+      # message is expected here: a single-run report is the intended result,
+      # not a lost history.
+      - name: Generate the report
+        if: steps.suite.outputs.ok == 'true' && steps.gate.outputs.green == 'true' && steps.newer.outputs.publish == 'true'
+        run: npm run allure:ci
+
+      # This report is public. A live Salesforce session takes two forms in this
+      # suite: the raw session id (org id, "!", token), which is what
+      # .auth/sf-session.json holds, and the frontdoor.jsp?sid= URL that
+      # global-setup.js navigates to. Either one in an attachment, an error
+      # message or a trace would hand out a working login. Only file names are
+      # printed, never the matched text, so the log does not leak it either.
+      - name: Scan the report for Salesforce session ids
+        if: steps.suite.outputs.ok == 'true' && steps.gate.outputs.green == 'true' && steps.newer.outputs.publish == 'true'
+        run: |
+          set -uo pipefail
+          hits="$( { grep -rlE '00D[A-Za-z0-9]{12,15}![A-Za-z0-9._]{20,}' allure-report; \
+                     grep -rlF 'frontdoor.jsp?sid=' allure-report; } | sort -u )"
+          if [ -n "$hits" ]; then
+            echo "::error::Refusing to publish: these files contain what looks like a Salesforce session id:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "No session id found in allure-report/."
+
+      # --force-with-lease against the SHA cloned above. The force push is what
+      # keeps the showcase repository at one commit, and it targets a
+      # generated-content repository that nothing else writes to. The lease
+      # makes a concurrent publish, or a hand edit, abort this push rather than
+      # be silently overwritten.
+      - name: Assemble and push the showcase
+        if: steps.suite.outputs.ok == 'true' && steps.gate.outputs.green == 'true' && steps.newer.outputs.publish == 'true'
+        env:
+          RUN_ID: ${{ steps.src.outputs.id }}
+          RUN_NUMBER: ${{ steps.src.outputs.run_number }}
+          RUN_URL: ${{ steps.src.outputs.html_url }}
+          HEAD_SHA: ${{ steps.src.outputs.head_sha }}
+          STARTED: ${{ steps.src.outputs.run_started_at }}
+          PASSED: ${{ steps.gate.outputs.passed }}
+          SKIPPED: ${{ steps.gate.outputs.skipped }}
+          TOTAL: ${{ steps.gate.outputs.total }}
+          LEASE_SHA: ${{ steps.live.outputs.lease_sha }}
+        run: |
+          set -euo pipefail
+          owner="${SHOWCASE_REPO%%/*}"
+          name="${SHOWCASE_REPO#*/}"
+          site="https://$owner.github.io/$name/"
+          cd showcase-live
+          git checkout --orphan publish
+          git rm -rfq .
+          cp -R ../allure-report/. .
+          # Without it, GitHub Pages runs Jekyll and drops every path that
+          # starts with an underscore.
+          touch .nojekyll
+          jq -n \
+            --argjson run_id "$RUN_ID" \
+            --argjson run_number "$RUN_NUMBER" \
+            --arg run_url "$RUN_URL" \
+            --arg commit "$HEAD_SHA" \
+            --arg run_started_at "$STARTED" \
+            --arg published_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson passed "$PASSED" \
+            --argjson skipped "$SKIPPED" \
+            --argjson total "$TOTAL" \
+            '{run_id: $run_id, run_number: $run_number, run_url: $run_url, commit: $commit,
+              run_started_at: $run_started_at, published_at: $published_at,
+              passed: $passed, skipped: $skipped, total: $total}' \
+            > showcase.json
+          cat > README.md <<EOF
+          # CPQ Allure showcase
+
+          Generated. This repository holds the Allure report of the most recent all-green
+          scheduled nightly of Salesforce-Quote-to-Cash-Test-Framework, and is overwritten
+          only by a newer one. Live site: $site. Source run: [CPQ Nightly #$RUN_NUMBER]($RUN_URL).
+
+          Do not edit by hand: the next publish replaces this repository's only commit.
+          EOF
+          git add -A
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -q -m "Allure report: CPQ Nightly #$RUN_NUMBER ($PASSED passed)"
+          git push --force-with-lease="main:$LEASE_SHA" origin publish:main
+          {
+            echo "Published CPQ Nightly #$RUN_NUMBER ($TOTAL result file(s): $PASSED passed, $SKIPPED skipped)."
+            echo ""
+            echo "$site"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the deploy key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/showcase_key"
