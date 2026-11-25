@@ -825,6 +825,33 @@ async function main() {
     console.warn(`Ledger merge failed (shards kept for \`npm run ledger:merge\`): ${e.message}`);
   }
 
+  // ---------------------------------------------------------------------
+  // 4. Wipe the CI session ONCE, for the same reason the merge is here.
+  //
+  //    .auth/ is shared by every lane, so the child that removes it removes it
+  //    for its siblings. global-teardown.js used to do this unconditionally
+  //    under CI and the first lane to finish took the session away from the
+  //    lanes still running — see the CPQ_REUSE_SESSION note there for the
+  //    errors that produced. Children now defer, and this is where the wipe
+  //    lands instead: after the last lane has exited, when nothing can still
+  //    need the token.
+  //
+  //    CI only. Locally the session is deliberately left behind so the next
+  //    run does not have to re-authenticate.
+  // ---------------------------------------------------------------------
+  if (process.env.CI) {
+    const authDir = path.join(ROOT, '.auth');
+    try {
+      if (fs.existsSync(authDir)) {
+        fs.rmSync(authDir, { recursive: true, force: true });
+        console.log('Session wiped (.auth/) — CI runner.');
+      }
+    } catch (e) {
+      // Never fail a green run over a token file on an ephemeral runner.
+      console.warn(`Could not wipe .auth/: ${e.message}`);
+    }
+  }
+
   console.log('\n─────────────── parallel run summary ───────────────');
   for (const r of results) {
     // Counts come from the lane's own JSON report; the exit CODE is what
